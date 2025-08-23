@@ -697,6 +697,15 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         # Get the base URL for this server, respecting proxy headers
         host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost:8081')
         proto = self.headers.get('X-Forwarded-Proto', 'http')
+        
+        # WORKAROUND: Force HTTPS for production domain
+        # TODO: Fix nginx/Cloudflare configuration to properly pass X-Forwarded-Proto header
+        # Currently nginx on VPS doesn't pass this header, so we force HTTPS for production
+        # This should be removed once nginx config is updated to include:
+        # proxy_set_header X-Forwarded-Proto $scheme;
+        if 'adhdbudget.bieda.it' in host:
+            proto = 'https'
+        
         base_url = f"{proto}://{host}"
         
         # OAuth 2.0 Authorization Server Metadata
@@ -726,6 +735,15 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         # Get the base URL for this server, respecting proxy headers
         host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost:8081')
         proto = self.headers.get('X-Forwarded-Proto', 'http')
+        
+        # WORKAROUND: Force HTTPS for production domain
+        # TODO: Fix nginx/Cloudflare configuration to properly pass X-Forwarded-Proto header
+        # Currently nginx on VPS doesn't pass this header, so we force HTTPS for production
+        # This should be removed once nginx config is updated to include:
+        # proxy_set_header X-Forwarded-Proto $scheme;
+        if 'adhdbudget.bieda.it' in host:
+            proto = 'https'
+        
         base_url = f"{proto}://{host}"
         
         # OAuth 2.0 Protected Resource Metadata

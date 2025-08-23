@@ -194,6 +194,17 @@ Configure WhatsApp Business Cloud API:
 - `WHATSAPP_TOKEN`
 - `WHATSAPP_WEBHOOK_SECRET`
 
+## Known Issues & Workarounds
+
+### HTTPS URLs in OAuth Discovery
+**Issue**: OAuth discovery returns HTTP URLs instead of HTTPS on production
+**Cause**: Nginx proxy on VPS doesn't pass `X-Forwarded-Proto` header
+**Workaround**: MCP server forces HTTPS for `adhdbudget.bieda.it` domain (see `src/mcp_server_oauth.py` lines 701-706)
+**Fix**: Update nginx configuration on VPS to include:
+```nginx
+proxy_set_header X-Forwarded-Proto https;
+```
+
 ## Troubleshooting
 
 ### Services not starting
