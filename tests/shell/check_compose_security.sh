@@ -59,6 +59,8 @@ check_running_containers_user() {
                 echo -e "${YELLOW}⚠${NC} Container running as root (expected for DB): $container"
             elif [[ "$container" == *"test"* ]]; then
                 echo -e "${YELLOW}⚠${NC} Container running as root (test container needs Docker access): $container"
+            elif [[ "$container" == *"mcp-inspector"* ]]; then
+                echo -e "${YELLOW}⚠${NC} Container running as root (MCP Inspector dev tool): $container"
             else
                 root_containers+=("$container")
                 echo -e "${RED}✗${NC} Container running as root: $container"

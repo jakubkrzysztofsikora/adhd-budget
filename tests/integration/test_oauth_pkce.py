@@ -16,7 +16,9 @@ from urllib.parse import urlencode, parse_qs, urlparse
 class TestOAuthPKCE:
     """Test OAuth 2.0 implementation with PKCE for Claude Desktop compatibility"""
     
-    BASE_URL = "http://localhost:8081"
+    # Use mcp-server when running in container, localhost otherwise
+    import os
+    BASE_URL = os.getenv("MCP_URL", "http://localhost:8081")
     
     @pytest.fixture
     def pkce_challenge(self):

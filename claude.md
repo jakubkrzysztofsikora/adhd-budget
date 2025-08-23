@@ -303,12 +303,17 @@ This protocol MUST be executed after each change, feature addition, or bugfix. I
 ./tests/shell/scan_git_secrets.sh      # S1: No secrets in code
 ./tests/shell/check_compose_security.sh # S4: Container security
 
-# 2. Unit tests (if code changed)
-python -m pytest tests/unit/ -v
+# 2. Unit tests (runs locally)
+python3 -m pytest tests/unit/ -v
 
-# 3. Integration tests (if services changed)
-docker compose up -d
-python -m pytest tests/integration/ -v
+# 3. Integration tests (MUST run in container for proper networking)
+DB_PASSWORD=testdupa123! docker compose up -d
+DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/integration/ -v
+
+# Or run specific test suites:
+DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/integration/test_t1_compose_resilience.py -v
+DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/integration/test_t4_mcp_streaming.py -v
+DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/integration/test_oauth_pkce.py -v
 ```
 
 ### CI/CD Pipeline (GitHub Actions)
