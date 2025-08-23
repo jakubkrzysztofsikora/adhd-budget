@@ -1,0 +1,302 @@
+[
+  {
+    "id": "tx_001",
+    "date": "2024-01-15",
+    "amount": 45.20,
+    "merchant": "Tesco Express",
+    "description": "Tesco Express - Groceries",
+    "category": null,
+    "expected_category": "groceries",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_002",
+    "date": "2024-01-15",
+    "amount": 12.50,
+    "merchant": "Uber",
+    "description": "Uber Trip - Home to Office",
+    "category": null,
+    "expected_category": "transport",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_003",
+    "date": "2024-01-15",
+    "amount": 15.99,
+    "merchant": "Netflix",
+    "description": "Netflix Monthly Subscription",
+    "category": null,
+    "expected_category": "entertainment",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_004",
+    "date": "2024-01-16",
+    "amount": 65.00,
+    "merchant": "Pizza Express",
+    "description": "Pizza Express - Dinner with friends",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_005",
+    "date": "2024-01-16",
+    "amount": 89.00,
+    "merchant": "British Gas",
+    "description": "British Gas - Monthly Bill",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_006",
+    "date": "2024-01-16",
+    "amount": 34.99,
+    "merchant": "Amazon UK",
+    "description": "Amazon Purchase - Books",
+    "category": null,
+    "expected_category": "shopping",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_007",
+    "date": "2024-01-17",
+    "amount": 24.99,
+    "merchant": "Pure Gym",
+    "description": "Pure Gym Monthly Membership",
+    "category": null,
+    "expected_category": "health",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_008",
+    "date": "2024-01-17",
+    "amount": 1200.00,
+    "merchant": "Property Management Ltd",
+    "description": "Monthly Rent Payment",
+    "category": null,
+    "expected_category": "rent",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_009",
+    "date": "2024-01-17",
+    "amount": 78.43,
+    "merchant": "Sainsburys",
+    "description": "Sainsburys - Weekly Shop",
+    "category": null,
+    "expected_category": "groceries",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_010",
+    "date": "2024-01-18",
+    "amount": 4.50,
+    "merchant": "Costa Coffee",
+    "description": "Costa Coffee - Latte",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_011",
+    "date": "2024-01-18",
+    "amount": 45.00,
+    "merchant": "Shell",
+    "description": "Shell Petrol Station - Fuel",
+    "category": null,
+    "expected_category": "transport",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_012",
+    "date": "2024-01-18",
+    "amount": 120.00,
+    "merchant": "Vodafone",
+    "description": "Vodafone - Phone Bill",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_013",
+    "date": "2024-01-19",
+    "amount": 25.00,
+    "merchant": "Deliveroo",
+    "description": "Deliveroo - Takeaway",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_014",
+    "date": "2024-01-19",
+    "amount": 150.00,
+    "merchant": "Council",
+    "description": "Council Tax - Monthly",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_015",
+    "date": "2024-01-19",
+    "amount": 9.99,
+    "merchant": "Spotify",
+    "description": "Spotify Premium",
+    "category": null,
+    "expected_category": "entertainment",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_016",
+    "date": "2024-01-20",
+    "amount": 55.00,
+    "merchant": "Zara",
+    "description": "Zara - Clothing",
+    "category": null,
+    "expected_category": "shopping",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_017",
+    "date": "2024-01-20",
+    "amount": 12.00,
+    "merchant": "Boots",
+    "description": "Boots Pharmacy - Prescriptions",
+    "category": null,
+    "expected_category": "health",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_018",
+    "date": "2024-01-20",
+    "amount": 35.50,
+    "merchant": "Lidl",
+    "description": "Lidl - Groceries",
+    "category": null,
+    "expected_category": "groceries",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_019",
+    "date": "2024-01-21",
+    "amount": 8.00,
+    "merchant": "TfL",
+    "description": "Transport for London - Daily Cap",
+    "category": null,
+    "expected_category": "transport",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_020",
+    "date": "2024-01-21",
+    "amount": 450.00,
+    "merchant": "Holiday Inn",
+    "description": "Holiday Inn - Weekend Break Booking",
+    "category": null,
+    "expected_category": "entertainment",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_021",
+    "date": "2024-01-21",
+    "amount": 22.00,
+    "merchant": "Nandos",
+    "description": "Nandos - Lunch",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_022",
+    "date": "2024-01-22",
+    "amount": 95.00,
+    "merchant": "Thames Water",
+    "description": "Thames Water - Quarterly Bill",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_023",
+    "date": "2024-01-22",
+    "amount": 28.00,
+    "merchant": "Asda",
+    "description": "Asda - Quick Shop",
+    "category": null,
+    "expected_category": "groceries",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_024",
+    "date": "2024-01-22",
+    "amount": 15.00,
+    "merchant": "Vue Cinema",
+    "description": "Vue Cinema - Movie Tickets",
+    "category": null,
+    "expected_category": "entertainment",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_025",
+    "date": "2024-01-23",
+    "amount": 650.00,
+    "merchant": "Admiral Insurance",
+    "description": "Admiral - Car Insurance Annual",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_026",
+    "date": "2024-01-23",
+    "amount": 18.50,
+    "merchant": "Pret A Manger",
+    "description": "Pret - Lunch and Coffee",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_027",
+    "date": "2024-01-23",
+    "amount": 42.00,
+    "merchant": "Primark",
+    "description": "Primark - Clothing",
+    "category": null,
+    "expected_category": "shopping",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_028",
+    "date": "2024-01-24",
+    "amount": 3.50,
+    "merchant": "Starbucks",
+    "description": "Starbucks - Coffee",
+    "category": null,
+    "expected_category": "eating_out",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_029",
+    "date": "2024-01-24",
+    "amount": 60.00,
+    "merchant": "EE",
+    "description": "EE - Broadband",
+    "category": null,
+    "expected_category": "bills",
+    "account": "revolut_main"
+  },
+  {
+    "id": "tx_030",
+    "date": "2024-01-24",
+    "amount": 85.00,
+    "merchant": "Co-op",
+    "description": "Co-op Food - Weekly Shop",
+    "category": null,
+    "expected_category": "groceries",
+    "account": "revolut_main"
+  }
+]

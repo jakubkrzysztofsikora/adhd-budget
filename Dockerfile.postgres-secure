@@ -1,0 +1,12 @@
+FROM postgres:15-alpine@sha256:987b242173006d6df08506f10b967a71478a3610664cfefbc49b9c775d3d0eed
+
+# Postgres needs to start as root to set up directories, 
+# but it drops privileges to postgres user (UID 70) for the actual database process
+# This is the standard postgres behavior and is considered secure
+
+# The postgres user already exists in the base image with UID 70
+# We'll use gosu to drop privileges after initialization
+RUN apk add --no-cache gosu
+
+# We can't use USER directive here because postgres needs root for initialization
+# But the actual postgres process will run as postgres user

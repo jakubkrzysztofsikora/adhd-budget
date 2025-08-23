@@ -1,0 +1,45 @@
+FROM python:3.11-alpine
+
+# Install system dependencies as root
+RUN apk add --no-cache \
+    docker-cli \
+    docker-compose \
+    postgresql-client \
+    gcc \
+    musl-dev \
+    postgresql-dev \
+    bash \
+    sudo
+
+# Create non-root user
+RUN adduser -D -u 1000 testuser && \
+    echo "testuser ALL=(ALL) NOPASSWD: /usr/bin/docker" >> /etc/sudoers
+
+# Install Python test dependencies
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    pytest-timeout \
+    pytest-cov \
+    requests \
+    aiohttp \
+    psycopg2-binary \
+    freezegun \
+    vcrpy \
+    pyyaml \
+    pyjwt \
+    pg8000
+
+WORKDIR /app
+
+# Copy test files and change ownership
+COPY --chown=1000:1000 tests/ tests/
+COPY --chown=1000:1000 src/ src/
+
+# Set environment for tests
+ENV PYTHONPATH=/app
+
+# Test runner needs root for docker access
+# This is acceptable for test containers only
+
+CMD ["pytest", "-v"]

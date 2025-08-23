@@ -1,0 +1,206 @@
+{
+  "description": "14-day synthetic dataset for testing projections and outlier detection",
+  "start_date": "2024-01-01",
+  "end_date": "2024-01-14",
+  "monthly_budget": 3000.0,
+  "starting_balance": 3500.0,
+  "days": [
+    {
+      "day": 1,
+      "date": "2024-01-01",
+      "day_of_month": 1,
+      "transactions": [
+        {"id": "d1_1", "amount": 45.20, "description": "Groceries", "is_outlier": false},
+        {"id": "d1_2", "amount": 12.50, "description": "Transport", "is_outlier": false},
+        {"id": "d1_3", "amount": 1200.00, "description": "Rent", "is_outlier": true}
+      ],
+      "daily_spend": 1257.70,
+      "daily_spend_adjusted": 57.70,
+      "cumulative_spend": 1257.70
+    },
+    {
+      "day": 2,
+      "date": "2024-01-02",
+      "day_of_month": 2,
+      "transactions": [
+        {"id": "d2_1", "amount": 65.00, "description": "Restaurant", "is_outlier": false},
+        {"id": "d2_2", "amount": 24.99, "description": "Subscription", "is_outlier": false}
+      ],
+      "daily_spend": 89.99,
+      "daily_spend_adjusted": 89.99,
+      "cumulative_spend": 1347.69
+    },
+    {
+      "day": 3,
+      "date": "2024-01-03",
+      "day_of_month": 3,
+      "transactions": [
+        {"id": "d3_1", "amount": 78.43, "description": "Weekly shop", "is_outlier": false},
+        {"id": "d3_2", "amount": 4.50, "description": "Coffee", "is_outlier": false},
+        {"id": "d3_3", "amount": 45.00, "description": "Fuel", "is_outlier": false}
+      ],
+      "daily_spend": 127.93,
+      "daily_spend_adjusted": 127.93,
+      "cumulative_spend": 1475.62
+    },
+    {
+      "day": 4,
+      "date": "2024-01-04",
+      "day_of_month": 4,
+      "transactions": [
+        {"id": "d4_1", "amount": 25.00, "description": "Takeaway", "is_outlier": false},
+        {"id": "d4_2", "amount": 150.00, "description": "Council Tax", "is_outlier": false}
+      ],
+      "daily_spend": 175.00,
+      "daily_spend_adjusted": 175.00,
+      "cumulative_spend": 1650.62
+    },
+    {
+      "day": 5,
+      "date": "2024-01-05",
+      "day_of_month": 5,
+      "transactions": [
+        {"id": "d5_1", "amount": 55.00, "description": "Clothing", "is_outlier": false},
+        {"id": "d5_2", "amount": 12.00, "description": "Pharmacy", "is_outlier": false},
+        {"id": "d5_3", "amount": 650.00, "description": "Car Insurance", "is_outlier": true}
+      ],
+      "daily_spend": 717.00,
+      "daily_spend_adjusted": 67.00,
+      "cumulative_spend": 2367.62
+    },
+    {
+      "day": 6,
+      "date": "2024-01-06",
+      "day_of_month": 6,
+      "transactions": [
+        {"id": "d6_1", "amount": 35.50, "description": "Groceries", "is_outlier": false},
+        {"id": "d6_2", "amount": 8.00, "description": "Transport", "is_outlier": false}
+      ],
+      "daily_spend": 43.50,
+      "daily_spend_adjusted": 43.50,
+      "cumulative_spend": 2411.12
+    },
+    {
+      "day": 7,
+      "date": "2024-01-07",
+      "day_of_month": 7,
+      "transactions": [
+        {"id": "d7_1", "amount": 22.00, "description": "Lunch", "is_outlier": false},
+        {"id": "d7_2", "amount": 95.00, "description": "Water Bill", "is_outlier": false},
+        {"id": "d7_3", "amount": 450.00, "description": "Holiday Booking", "is_outlier": true}
+      ],
+      "daily_spend": 567.00,
+      "daily_spend_adjusted": 117.00,
+      "cumulative_spend": 2978.12
+    },
+    {
+      "day": 8,
+      "date": "2024-01-08",
+      "day_of_month": 8,
+      "transactions": [
+        {"id": "d8_1", "amount": 28.00, "description": "Groceries", "is_outlier": false},
+        {"id": "d8_2", "amount": 15.00, "description": "Cinema", "is_outlier": false}
+      ],
+      "daily_spend": 43.00,
+      "daily_spend_adjusted": 43.00,
+      "cumulative_spend": 3021.12
+    },
+    {
+      "day": 9,
+      "date": "2024-01-09",
+      "day_of_month": 9,
+      "transactions": [
+        {"id": "d9_1", "amount": 18.50, "description": "Lunch", "is_outlier": false},
+        {"id": "d9_2", "amount": 42.00, "description": "Shopping", "is_outlier": false},
+        {"id": "d9_3", "amount": 89.00, "description": "Gas Bill", "is_outlier": false}
+      ],
+      "daily_spend": 149.50,
+      "daily_spend_adjusted": 149.50,
+      "cumulative_spend": 3170.62
+    },
+    {
+      "day": 10,
+      "date": "2024-01-10",
+      "day_of_month": 10,
+      "transactions": [
+        {"id": "d10_1", "amount": 3.50, "description": "Coffee", "is_outlier": false},
+        {"id": "d10_2", "amount": 60.00, "description": "Broadband", "is_outlier": false}
+      ],
+      "daily_spend": 63.50,
+      "daily_spend_adjusted": 63.50,
+      "cumulative_spend": 3234.12
+    },
+    {
+      "day": 11,
+      "date": "2024-01-11",
+      "day_of_month": 11,
+      "transactions": [
+        {"id": "d11_1", "amount": 85.00, "description": "Weekly shop", "is_outlier": false},
+        {"id": "d11_2", "amount": 120.00, "description": "Phone Bill", "is_outlier": false}
+      ],
+      "daily_spend": 205.00,
+      "daily_spend_adjusted": 205.00,
+      "cumulative_spend": 3439.12
+    },
+    {
+      "day": 12,
+      "date": "2024-01-12",
+      "day_of_month": 12,
+      "transactions": [
+        {"id": "d12_1", "amount": 34.99, "description": "Amazon", "is_outlier": false},
+        {"id": "d12_2", "amount": 15.99, "description": "Netflix", "is_outlier": false}
+      ],
+      "daily_spend": 50.98,
+      "daily_spend_adjusted": 50.98,
+      "cumulative_spend": 3490.10
+    },
+    {
+      "day": 13,
+      "date": "2024-01-13",
+      "day_of_month": 13,
+      "transactions": [
+        {"id": "d13_1", "amount": 52.30, "description": "Groceries", "is_outlier": false},
+        {"id": "d13_2", "amount": 25.00, "description": "Takeaway", "is_outlier": false},
+        {"id": "d13_3", "amount": 9.99, "description": "Spotify", "is_outlier": false}
+      ],
+      "daily_spend": 87.29,
+      "daily_spend_adjusted": 87.29,
+      "cumulative_spend": 3577.39
+    },
+    {
+      "day": 14,
+      "date": "2024-01-14",
+      "day_of_month": 14,
+      "transactions": [
+        {"id": "d14_1", "amount": 45.00, "description": "Fuel", "is_outlier": false},
+        {"id": "d14_2", "amount": 18.00, "description": "Lunch", "is_outlier": false}
+      ],
+      "daily_spend": 63.00,
+      "daily_spend_adjusted": 63.00,
+      "cumulative_spend": 3640.39
+    }
+  ],
+  "summary": {
+    "total_transactions": 48,
+    "total_spent": 3640.39,
+    "total_outliers": 3,
+    "outlier_total": 2300.00,
+    "adjusted_total": 1340.39,
+    "average_daily_spend": 260.03,
+    "average_daily_spend_adjusted": 95.74,
+    "projected_monthly_spend": 7801.00,
+    "projected_monthly_spend_adjusted": 2872.20,
+    "budget_variance": 4801.00,
+    "budget_variance_adjusted": -127.80
+  },
+  "expected_results": {
+    "categorization_accuracy_target": 0.8,
+    "projection_error_tolerance": 0.05,
+    "outlier_false_positive_rate_max": 0.1,
+    "outliers_detected": ["d1_3", "d5_3", "d7_3"],
+    "day_10_pace_projection": 7802.30,
+    "day_10_pace_projection_adjusted": 2110.20,
+    "day_14_month_end_projection": 7802.30,
+    "day_14_month_end_balance": -4302.30
+  }
+}

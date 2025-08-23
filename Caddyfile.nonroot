@@ -1,0 +1,33 @@
+# Caddy configuration for non-root operation
+:8080 {
+    # Health endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # MCP Server with SSE support
+    handle /mcp* {
+        reverse_proxy mcp-server:8081 {
+            # Disable buffering for SSE
+            flush_interval -1
+            
+            # Headers for SSE
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+        }
+    }
+
+    # API endpoints
+    handle /api* {
+        reverse_proxy api:8082 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Default handler
+    handle {
+        respond "ADHD Budget Assistant" 200
+    }
+}

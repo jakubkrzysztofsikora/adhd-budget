@@ -1,0 +1,118 @@
+time="2025-08-23T14:40:44+02:00" level=warning msg="The \"ENABLE_BANKING_KEY\" variable is not set. Defaulting to a blank string."
+time="2025-08-23T14:40:44+02:00" level=warning msg="The \"ENABLE_BANKING_SECRET\" variable is not set. Defaulting to a blank string."
+time="2025-08-23T14:40:44+02:00" level=warning msg="/Users/jakubsikora/Repos/personal/adhd-budget/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+ Container adhd-budget-api-1  Running
+ Container adhd-budget-db-1  Running
+ Container adhd-budget-mcp-server-1  Running
+ Container adhd-budget-reverse-proxy-1  Running
+ Container adhd-budget-db-1  Waiting
+ Container adhd-budget-db-1  Healthy
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.1, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /app
+plugins: cov-6.2.1, asyncio-1.1.0, timeout-2.4.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 68 items
+
+tests/e2e/test_t2_enable_banking_flow.py::TestT2EnableBankingFlow::test_sandbox_authentication PASSED [  1%]
+tests/e2e/test_t2_enable_banking_flow.py::TestT2EnableBankingFlow::test_fetch_transform_store PASSED [  2%]
+tests/e2e/test_t2_enable_banking_flow.py::TestT2EnableBankingFlow::test_idempotent_upserts PASSED [  4%]
+tests/e2e/test_t2_enable_banking_flow.py::TestT2EnableBankingFlow::test_reconsent_flow PASSED [  5%]
+tests/e2e/test_t2_enable_banking_flow.py::TestT2EnableBankingFlow::test_batch_processing_deduplication PASSED [  7%]
+tests/integration/test_t1_compose_resilience.py::TestT1ComposeResilience::test_all_services_boot PASSED [  8%]
+tests/integration/test_t1_compose_resilience.py::TestT1ComposeResilience::test_healthchecks_pass PASSED [ 10%]
+tests/integration/test_t1_compose_resilience.py::TestT1ComposeResilience::test_state_persistence_after_restart PASSED [ 11%]
+tests/integration/test_t1_compose_resilience.py::TestT1ComposeResilience::test_automatic_restart_on_failure SKIPPED [ 13%]
+tests/integration/test_t1_compose_resilience.py::TestT1ComposeResilience::test_network_connectivity PASSED [ 14%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_jsonrpc_through_proxy PASSED [ 16%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_sse_streaming_through_proxy PASSED [ 17%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_no_websocket_usage PASSED [ 19%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_tool_invocation_through_proxy PASSED [ 20%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_malformed_request_handling PASSED [ 22%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_long_running_stream PASSED [ 23%]
+tests/integration/test_t4_mcp_streaming.py::TestT4MCPStreaming::test_auth_required PASSED [ 25%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_window_detection_frozen PASSED [ 26%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_run_once_daily_frozen PASSED [ 27%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_summary_payload_complete PASSED [ 29%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_job_execution_deterministic PASSED [ 30%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_next_run_calculation_frozen PASSED [ 32%]
+tests/module/test_t5_scheduler_deterministic.py::TestT5SchedulerDeterministic::test_summary_format_whatsapp_ready PASSED [ 33%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_tls_enforced SKIPPED [ 35%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_hsts_header_present SKIPPED [ 36%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_tls_version_requirements SKIPPED [ 38%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_cipher_strength SKIPPED [ 39%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_security_headers_recommended PASSED [ 41%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_streaming_preserved PASSED [ 42%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_certificate_validation SKIPPED [ 44%]
+tests/security/test_s2_tls_validation.py::TestS2TLSValidation::test_ssl_labs_grade_requirements PASSED [ 45%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_api_requires_authentication PASSED [ 47%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_mcp_requires_bearer_token PASSED [ 48%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_token_expiry_enforced PASSED [ 50%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_enable_banking_oauth_flow PASSED [ 51%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_no_sql_injection PASSED [ 52%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_no_path_traversal FAILED [ 54%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_rate_limiting SKIPPED [ 55%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_cors_configuration PASSED [ 57%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_sensitive_data_not_exposed PASSED [ 58%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_session_security PASSED [ 60%]
+tests/security/test_s3_access_control.py::TestS3AccessControl::test_authorization_levels PASSED [ 61%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_containers_run_as_non_root FAILED [ 63%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_images_pinned_by_digest SKIPPED [ 64%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_capabilities_dropped PASSED [ 66%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_no_privileged_containers FAILED [ 67%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_resource_limits_set PASSED [ 69%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_read_only_filesystems PASSED [ 70%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_security_options PASSED [ 72%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_healthchecks_defined PASSED [ 73%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_no_host_network_mode PASSED [ 75%]
+tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_no_dangerous_mounts FAILED [ 76%]
+tests/unit/test_categorization.py::TestCategorization::test_categorization_accuracy PASSED [ 77%]
+tests/unit/test_categorization.py::TestCategorization::test_category_distribution PASSED [ 79%]
+tests/unit/test_categorization.py::TestCategorization::test_deterministic_categorization PASSED [ 80%]
+tests/unit/test_categorization.py::TestCategorization::test_edge_cases PASSED [ 82%]
+tests/unit/test_outliers.py::TestOutliers::test_outlier_detection_accuracy PASSED [ 83%]
+tests/unit/test_outliers.py::TestOutliers::test_statistical_outlier_detection PASSED [ 85%]
+tests/unit/test_outliers.py::TestOutliers::test_budget_based_outlier_detection PASSED [ 86%]
+tests/unit/test_outliers.py::TestOutliers::test_adjusted_pace_calculation PASSED [ 88%]
+tests/unit/test_outliers.py::TestOutliers::test_no_outliers_scenario PASSED [ 89%]
+tests/unit/test_outliers.py::TestOutliers::test_all_outliers_scenario PASSED [ 91%]
+tests/unit/test_outliers.py::TestOutliers::test_recurring_large_transactions PASSED [ 92%]
+tests/unit/test_projections.py::TestProjections::test_monthly_pace_projection PASSED [ 94%]
+tests/unit/test_projections.py::TestProjections::test_month_end_balance_projection PASSED [ 95%]
+tests/unit/test_projections.py::TestProjections::test_vs_budget_calculation PASSED [ 97%]
+tests/unit/test_projections.py::TestProjections::test_edge_cases PASSED  [ 98%]
+tests/unit/test_projections.py::TestProjections::test_projection_with_synthetic_data PASSED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestS3AccessControl.test_no_path_traversal __________________
+tests/security/test_s3_access_control.py:162: in test_no_path_traversal
+    assert response.status_code in [400, 403, 404], \
+E   AssertionError: Path traversal not properly blocked: ..\..\..\windows\system32\config\sam
+E   assert 401 in [400, 403, 404]
+E    +  where 401 = <Response [401]>.status_code
+___________ TestS4ContainerSecurity.test_containers_run_as_non_root ____________
+tests/security/test_s4_container_security.py:84: in test_containers_run_as_non_root
+    assert len(root_containers) == 0, \
+E   AssertionError: Containers running as root: ['adhd-budget-test-runner-run-a12ece7875a2', 'adhd-budget-reverse-proxy-1', 'adhd-budget-db-1', 'buildx_buildkit_container-builder0']
+E   assert 4 == 0
+E    +  where 4 = len(['adhd-budget-test-runner-run-a12ece7875a2', 'adhd-budget-reverse-proxy-1', 'adhd-budget-db-1', 'buildx_buildkit_container-builder0'])
+____________ TestS4ContainerSecurity.test_no_privileged_containers _____________
+tests/security/test_s4_container_security.py:167: in test_no_privileged_containers
+    assert len(privileged_containers) == 0, \
+E   AssertionError: Containers running in privileged mode: ['buildx_buildkit_container-builder0']
+E   assert 1 == 0
+E    +  where 1 = len(['buildx_buildkit_container-builder0'])
+_______________ TestS4ContainerSecurity.test_no_dangerous_mounts _______________
+tests/security/test_s4_container_security.py:381: in test_no_dangerous_mounts
+    assert len(dangerous_mounts) == 0, \
+E   AssertionError: Dangerous host mounts found: ['adhd-budget-test-runner-run-a12ece7875a2: /var/run/docker.sock -> /var/run/docker.sock']
+E   assert 1 == 0
+E    +  where 1 = len(['adhd-budget-test-runner-run-a12ece7875a2: /var/run/docker.sock -> /var/run/docker.sock'])
+=========================== short test summary info ============================
+FAILED tests/security/test_s3_access_control.py::TestS3AccessControl::test_no_path_traversal
+FAILED tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_containers_run_as_non_root
+FAILED tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_no_privileged_containers
+FAILED tests/security/test_s4_container_security.py::TestS4ContainerSecurity::test_no_dangerous_mounts
+=================== 4 failed, 56 passed, 8 skipped in 8.00s ====================
+

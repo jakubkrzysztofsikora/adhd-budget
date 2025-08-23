@@ -1,0 +1,46 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://api.enablebanking.com/sandbox/accounts
+  response:
+    body:
+      string: '{"code":401,"message":"JWT is not valid"}'
+    headers:
+      Alt-Svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      Content-Length:
+      - '41'
+      Via:
+      - 1.1 google
+      content-security-policy:
+      - default-src 'self';
+      content-type:
+      - application/json
+      date:
+      - Sat, 23 Aug 2025 12:25:23 GMT
+      server:
+      - Google Frontend
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains
+      x-cloud-trace-context:
+      - 28b62b59729bda37d1befa4474553844
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - DENY
+      x-request-id:
+      - d31a3eca-0bb6-4c3d-a1d7-a91fdcec8327
+    status:
+      code: 401
+      message: Unauthorized
+version: 1
