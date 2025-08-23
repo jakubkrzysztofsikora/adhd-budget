@@ -1,0 +1,69 @@
+# Production Caddy configuration when behind Cloudflare proxy
+# Cloudflare handles SSL termination, Caddy handles HTTP only
+
+:80 {
+    # Trust Cloudflare proxy headers
+    trusted_proxies cloudflare
+
+    # Health endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # MCP Server with SSE support
+    handle /mcp* {
+        reverse_proxy mcp-server:8081 {
+            # Disable buffering for SSE
+            flush_interval -1
+            
+            # Headers for SSE
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+            
+            # Pass Cloudflare headers
+            header_up X-Forwarded-Proto {header.CF-Visitor}
+            header_up X-Forwarded-Host {header.Host}
+            header_up X-Real-IP {header.CF-Connecting-IP}
+        }
+    }
+
+    # OAuth endpoints (well-known, token, callback)
+    handle /.well-known* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {header.CF-Connecting-IP}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {header.Host}
+        }
+    }
+    
+    handle /oauth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {header.CF-Connecting-IP}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {header.Host}
+        }
+    }
+    
+    handle /auth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {header.CF-Connecting-IP}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {header.Host}
+        }
+    }
+
+    # API endpoints
+    handle /api* {
+        reverse_proxy api:8082 {
+            header_up X-Real-IP {header.CF-Connecting-IP}
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {header.Host}
+        }
+    }
+
+    # Default handler
+    handle {
+        respond "ADHD Budget Assistant" 200
+    }
+}

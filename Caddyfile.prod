@@ -1,9 +1,8 @@
 # Production Caddy configuration with HTTPS
 adhdbudget.bieda.it {
     # Automatic HTTPS with Let's Encrypt
-    tls {
-        on_demand
-    }
+    # Note: If behind Cloudflare, set SSL/TLS to "Full (strict)" mode
+    tls
 
     # Security headers
     header {
