@@ -5,6 +5,7 @@ RUN pip install --no-cache-dir pyjwt
 
 WORKDIR /app
 
+# Switch to non-root user for security
 USER 1000:1000
 
 CMD ["python", "/app/simple_api_server.py"]
