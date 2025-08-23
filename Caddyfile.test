@@ -49,6 +49,15 @@
         }
     }
     
+    # Enable Banking API endpoints (goes to MCP server)
+    handle /api/enable-banking/* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+    
     # Other API endpoints
     handle /api* {
         reverse_proxy api:8082 {
