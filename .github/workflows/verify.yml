@@ -331,26 +331,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker images
-        run: |
-          # Build all required images
-          docker build -f Dockerfile.api -t adhd-budget-api:latest .
-          docker build -f Dockerfile.caddy-secure -t adhd-budget-proxy:latest .
-          docker build -f Dockerfile -t adhd-budget-app:latest .
-          
-          # Save images as tar files
-          docker save adhd-budget-api:latest -o api.tar
-          docker save adhd-budget-proxy:latest -o proxy.tar
-          docker save adhd-budget-app:latest -o app.tar
-
-      - name: Copy images and compose file to VPS
+      - name: Copy project files to VPS
         uses: appleboy/scp-action@v0.1.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_SSH_PASSWORD }}
           port: ${{ secrets.VPS_SSH_PORT }}
-          source: "api.tar,proxy.tar,app.tar,docker-compose.yml,.env.example,src/,Caddyfile.test"
+          source: "docker-compose.yml,Dockerfile*,src/,Caddyfile.test,.env.example"
           target: "/home/${{ secrets.VPS_USER }}/adhd-budget"
 
       - name: Deploy to VPS
@@ -362,14 +350,6 @@ jobs:
           port: ${{ secrets.VPS_SSH_PORT }}
           script: |
             cd /home/${{ secrets.VPS_USER }}/adhd-budget
-            
-            # Load Docker images
-            docker load -i api.tar
-            docker load -i proxy.tar
-            docker load -i app.tar
-            
-            # Clean up tar files
-            rm -f api.tar proxy.tar app.tar
             
             # Create private key file if provided
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
@@ -390,8 +370,8 @@ jobs:
             # Stop existing containers
             docker compose down || true
             
-            # Start services
-            docker compose up -d
+            # Build and start services
+            docker compose up -d --build
             
             # Health check
             sleep 10
