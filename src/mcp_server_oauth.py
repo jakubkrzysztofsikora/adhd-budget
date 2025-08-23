@@ -99,6 +99,8 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self._handle_oauth_revoke()
         elif self.path.startswith("/oauth/register"):
             self._handle_client_registration()
+        elif self.path == "/api/enable-banking/auth":
+            self._handle_api_enable_banking_auth()
         else:
             self.send_response(404)
             self.send_header("Content-Type", "text/plain")
@@ -467,6 +469,48 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.error(f"Session callback error: {str(e)}")
             return {"error": f"Failed to process session: {str(e)}"}
+    
+    def _handle_api_enable_banking_auth(self):
+        """Handle direct API call for Enable Banking auth (not MCP tool)"""
+        # Read request body
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        
+        try:
+            request_data = json.loads(body)
+            
+            # Get parameters from request
+            aspsp_name = request_data.get("aspsp_name", "MOCKASPSP_SANDBOX")
+            aspsp_country = request_data.get("aspsp_country", "FI")
+            redirect_url = request_data.get("redirect_url", "http://localhost:6274/callback")
+            state = request_data.get("state", f"api-{int(time.time())}")
+            
+            # Use the existing Enable Banking auth logic
+            result = self._handle_enable_banking_auth({
+                "aspsp_name": aspsp_name,
+                "aspsp_country": aspsp_country,
+                "redirect_url": redirect_url,
+                "state": state
+            })
+            
+            # Send JSON response
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode('utf-8'))
+            
+        except json.JSONDecodeError as e:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Invalid JSON: {str(e)}"}).encode('utf-8'))
+        except Exception as e:
+            logger.error(f"API auth error: {str(e)}")
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json") 
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Internal server error: {str(e)}"}).encode('utf-8'))
     
     def _handle_summary_today(self, args: Dict[str, Any], access_token: str) -> Dict[str, Any]:
         """Handle summary.today tool with Enable Banking data"""
@@ -1171,32 +1215,31 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
                             return;
                         }
                         
-                        // Call the Enable Banking auth tool via MCP
-                        fetch('/mcp', {
+                        // Call Enable Banking API directly for auth initiation
+                        const authData = {
+                            aspsp_name: bank,
+                            aspsp_country: country,
+                            redirect_url: 'REDIRECT_URI_PLACEHOLDER',
+                            state: 'STATE_PLACEHOLDER'
+                        };
+                        
+                        fetch('/api/enable-banking/auth', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                jsonrpc: '2.0',
-                                method: 'tools/call',
-                                params: {
-                                    name: 'enable.banking.auth',
-                                    arguments: {
-                                        aspsp_name: bank,
-                                        aspsp_country: country,
-                                        redirect_url: 'REDIRECT_URI_PLACEHOLDER',
-                                        state: 'STATE_PLACEHOLDER'
-                                    }
-                                },
-                                id: '1'
-                            })
+                            body: JSON.stringify(authData)
                         })
                         .then(res => res.json())
                         .then(data => {
-                            if (data.result && data.result.auth_url) {
-                                window.location.href = data.result.auth_url;
+                            if (data.auth_url) {
+                                window.location.href = data.auth_url;
+                            } else if (data.error) {
+                                alert('Failed to initiate authentication: ' + data.error);
                             } else {
                                 alert('Failed to initiate authentication: ' + JSON.stringify(data));
                             }
+                        })
+                        .catch(err => {
+                            alert('Network error: ' + err.message);
                         });
                     }
                     
