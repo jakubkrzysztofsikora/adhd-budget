@@ -356,7 +356,10 @@ jobs:
 
       - name: Create deployment archive
         run: |
-          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.test .env.example
+          # Create keys directory for deployment
+          mkdir -p keys
+          echo "Keys directory for Enable Banking private keys" > keys/README.md
+          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.test .env.example keys/
           
       - name: Copy deployment archive to VPS
         uses: appleboy/scp-action@v0.1.5
@@ -389,16 +392,34 @@ jobs:
             
             # Create private key file if provided
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
-              echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > /home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem
-              chmod 600 /home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem
+              mkdir -p /home/${{ secrets.VPS_USER }}/adhd-budget/keys
+              echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem
+              chmod 600 /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem
             fi
             
-            # Set up environment variables
+            # Create .env file with all required environment variables
+            cat > /home/${{ secrets.VPS_USER }}/adhd-budget/.env << EOF
+            DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}
+            MCP_TOKEN=${{ secrets.PROD_MCP_TOKEN }}
+            API_TOKEN=${{ secrets.PROD_API_TOKEN }}
+            ENABLE_APP_ID=${{ secrets.ENABLE_APP_ID }}
+            ENABLE_PRIVATE_KEY_PATH=/app/keys/${{ secrets.ENABLE_APP_ID }}.pem
+            ENABLE_API_URL=${{ secrets.ENABLE_API_URL }}
+            ENABLE_ENV=${{ secrets.ENABLE_ENV }}
+            ENABLE_API_BASE_URL=${{ secrets.ENABLE_API_BASE_URL }}
+            ENABLE_OAUTH_REDIRECT_URL=${{ secrets.ENABLE_OAUTH_REDIRECT_URL }}
+            ENABLE_OAUTH_SCOPES=${{ secrets.ENABLE_OAUTH_SCOPES }}
+            DOMAIN=${{ secrets.DOMAIN }}
+            ACME_EMAIL=${{ secrets.ACME_EMAIL }}
+            CADDYFILE=./Caddyfile
+            EOF
+            
+            # Export for docker compose
             export DB_PASSWORD="${{ secrets.PROD_DB_PASSWORD }}"
             export MCP_TOKEN="${{ secrets.PROD_MCP_TOKEN }}"
             export API_TOKEN="${{ secrets.PROD_API_TOKEN }}"
             export ENABLE_APP_ID="${{ secrets.ENABLE_APP_ID }}"
-            export ENABLE_PRIVATE_KEY_PATH="/home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem"
+            export ENABLE_PRIVATE_KEY_PATH="/app/keys/${{ secrets.ENABLE_APP_ID }}.pem"
             export ENABLE_API_URL="${{ secrets.ENABLE_API_URL }}"
             export DOMAIN="${{ secrets.DOMAIN }}"
             export ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
@@ -407,8 +428,8 @@ jobs:
             # Stop existing containers
             docker compose down || true
             
-            # Build and start services
-            docker compose up -d --build
+            # Build and start services with .env file
+            docker compose --env-file .env up -d --build
             
             # Health check
             sleep 10

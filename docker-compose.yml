@@ -37,7 +37,7 @@ services:
       - ENABLE_ENV=${ENABLE_ENV:-sandbox}
       - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
       - ENABLE_APP_ID=${ENABLE_APP_ID}
-      - ENABLE_PRIVATE_KEY_PATH=/app/keys/1ba6d8a6-68f8-4899-b0a4-c8d8a795337b.pem
+      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/${ENABLE_APP_ID}.pem}
       - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
       - ENABLE_OAUTH_SCOPES=${ENABLE_OAUTH_SCOPES:-accounts transactions}
     ports:
