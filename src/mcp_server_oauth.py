@@ -24,9 +24,26 @@ logger = logging.getLogger(__name__)
 class EnableBankingMCPHandler(BaseHTTPRequestHandler):
     """MCP Server with Enable Banking OAuth authentication"""
     
+    # Allowed origins for CORS
+    ALLOWED_ORIGINS = {
+        'https://claude.ai',
+        'https://claude.com',  # Future-proofing
+        'http://localhost:6274',  # MCP Inspector
+        'http://localhost:6277'   # MCP Inspector
+    }
+    
     def __init__(self, *args, **kwargs):
         """Initialize handler with Enable Banking client"""
         super().__init__(*args, **kwargs)
+    
+    def _add_cors_headers(self):
+        """Add CORS headers if origin is allowed"""
+        origin = self.headers.get('Origin', '')
+        if origin in self.ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
     
     def do_GET(self):
         """Handle GET requests for health checks, OAuth discovery, and SSE"""        
@@ -209,7 +226,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "auth.help", 
                     "description": "📋 How to authenticate with Enable Banking",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {}
                     }
@@ -217,7 +234,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "enable.banking.banks", 
                     "description": "🏦 List available banks",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {
                             "country": {
@@ -230,7 +247,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "enable.banking.auth", 
                     "description": "🔐 Start Enable Banking auth",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {
                             "aspsp_name": {
@@ -256,7 +273,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "enable.banking.callback", 
                     "description": "✅ Complete auth with session data",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {
                             "code": {
@@ -274,7 +291,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "summary.today", 
                     "description": "📊 Get today's financial summary (requires EB auth)",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {}
                     }
@@ -282,7 +299,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "projection.month", 
                     "description": "📈 Get monthly spending projections (requires EB auth)",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {}
                     }
@@ -290,7 +307,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "transactions.query", 
                     "description": "💳 Query transactions (requires EB auth)",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {
                             "since": {
@@ -307,7 +324,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 {
                     "name": "enable.banking.sync", 
                     "description": "🔄 Sync transactions from Enable Banking (requires EB auth)",
-                    "inputSchema": {
+                    "input_schema": {
                         "type": "object",
                         "properties": {}
                     }
@@ -741,7 +758,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self._add_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({'banks': banks}).encode())
                 return
@@ -775,14 +792,14 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self._add_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({'banks': banks}).encode())
             else:
                 # Return error but with fallback banks
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self._add_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     'error': f'Enable Banking API error: {response.status_code}',
@@ -794,7 +811,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # Return fallback banks on error
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps({
                 'error': str(e),
@@ -836,7 +853,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(discovery_data, indent=2).encode())
     
@@ -868,7 +885,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(resource_data, indent=2).encode())
     
@@ -930,7 +947,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Pragma", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(oauth_response).encode())
             
@@ -989,7 +1006,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Pragma", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(error_response).encode())
     
@@ -1020,7 +1037,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Pragma", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(registration_response).encode())
             
@@ -1393,9 +1410,7 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response, indent=2).encode())
     
@@ -1412,19 +1427,15 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response, indent=2).encode())
     
     def do_OPTIONS(self):
-        """Handle CORS preflight requests"""
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Content-Length", "0")
+        """Handle CORS preflight requests for Claude Desktop/Web"""
+        self.send_response(204)  # No Content is standard for OPTIONS
+        self._add_cors_headers()
+        self.send_header("Access-Control-Max-Age", "86400")  # Cache preflight for 24h
         self.end_headers()
     
     def log_message(self, format, *args):
