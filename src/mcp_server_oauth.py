@@ -4,7 +4,7 @@ MCP Server with Enable Banking OAuth Integration
 Implements T4 Gate: JSON-RPC 2.0 over SSE/HTTP with Enable Banking OAuth as sole auth
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import logging
@@ -1538,7 +1538,9 @@ def main():
     logger.info("  GET /auth/callback - OAuth callback")
     logger.info("  GET /health - Health check")
     
-    server = HTTPServer(("", port), EnableBankingMCPHandler)
+    # Use ThreadingHTTPServer to handle concurrent requests
+    # This fixes race conditions when tests run in parallel
+    server = ThreadingHTTPServer(("", port), EnableBankingMCPHandler)
     
     try:
         server.serve_forever()

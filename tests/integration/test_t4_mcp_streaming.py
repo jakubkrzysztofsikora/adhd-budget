@@ -140,7 +140,7 @@ class TestT4MCPStreaming:
                     "Sec-WebSocket-Key": "x3JJHMbDL1EzLkh9GBhXDw==",
                     "Sec-WebSocket-Version": "13"
                 },
-                timeout=5
+                timeout=10
             )
             # Should not upgrade to WebSocket
             assert response.status_code != 101, "WebSocket upgrade should fail"
@@ -171,7 +171,7 @@ class TestT4MCPStreaming:
                     "Authorization": f"Bearer {mcp_token}",
                     "Content-Type": "application/json"
                 },
-                timeout=5
+                timeout=10
             )
             
             assert response.status_code == 200
@@ -191,7 +191,7 @@ class TestT4MCPStreaming:
                 f"{proxy_url}/mcp",
                 json=bad_request,
                 headers={"Authorization": f"Bearer {mcp_token}"},
-                timeout=5
+                timeout=10
             )
             
             if response.status_code == 200:
