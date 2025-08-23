@@ -331,15 +331,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Copy project files to VPS
+      - name: Create deployment archive
+        run: |
+          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.test .env.example
+          
+      - name: Copy deployment archive to VPS
         uses: appleboy/scp-action@v0.1.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_SSH_PASSWORD }}
           port: ${{ secrets.VPS_SSH_PORT }}
-          source: "docker-compose.yml,Dockerfile*,src/,Caddyfile.test,.env.example"
-          target: "/home/${{ secrets.VPS_USER }}/adhd-budget"
+          source: "deploy.tar.gz"
+          target: "/home/${{ secrets.VPS_USER }}/"
 
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v0.1.8
@@ -349,7 +353,11 @@ jobs:
           password: ${{ secrets.VPS_SSH_PASSWORD }}
           port: ${{ secrets.VPS_SSH_PORT }}
           script: |
-            cd /home/${{ secrets.VPS_USER }}/adhd-budget
+            # Extract deployment archive
+            cd /home/${{ secrets.VPS_USER }}
+            mkdir -p adhd-budget
+            tar -xzf deploy.tar.gz -C adhd-budget/
+            cd adhd-budget
             
             # Create private key file if provided
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
