@@ -219,95 +219,40 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         
         self.send_json_result(response, request_id)
     
+    def _create_tool_definition(self, name: str, description: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Create tool definition with backward compatibility"""
+        tool_def = {
+            "name": name,
+            "description": description,
+            "input_schema": schema,
+            "inputSchema": schema  # Backward compatibility for older MCP clients
+        }
+        return tool_def
+    
     def _handle_tools_list(self, request_id):
         """Handle tools/list request"""
         result = {
             "tools": [
-                {
-                    "name": "auth.help", 
-                    "description": "📋 How to authenticate with Enable Banking",
-                    "input_schema": {
+                self._create_tool_definition(
+                    "summary.today", 
+                    "📊 Get today's financial summary",
+                    {
                         "type": "object",
                         "properties": {}
                     }
-                },
-                {
-                    "name": "enable.banking.banks", 
-                    "description": "🏦 List available banks",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "country": {
-                                "type": "string",
-                                "description": "Country code (e.g., FI, GB, DE)"
-                            }
-                        }
-                    }
-                },
-                {
-                    "name": "enable.banking.auth", 
-                    "description": "🔐 Start Enable Banking auth",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "aspsp_name": {
-                                "type": "string",
-                                "description": "Bank name (e.g., Mock ASPSP)"
-                            },
-                            "aspsp_country": {
-                                "type": "string", 
-                                "description": "Country code (e.g., FI)"
-                            },
-                            "redirect_url": {
-                                "type": "string",
-                                "description": "OAuth callback URL"
-                            },
-                            "state": {
-                                "type": "string",
-                                "description": "OAuth state parameter"
-                            }
-                        },
-                        "required": ["aspsp_name", "aspsp_country"]
-                    }
-                },
-                {
-                    "name": "enable.banking.callback", 
-                    "description": "✅ Complete auth with session data",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "Session ID from callback"
-                            },
-                            "redirect_uri": {
-                                "type": "string",
-                                "description": "Redirect URI used in auth"
-                            }
-                        },
-                        "required": ["code"]
-                    }
-                },
-                {
-                    "name": "summary.today", 
-                    "description": "📊 Get today's financial summary (requires EB auth)",
-                    "input_schema": {
+                ),
+                self._create_tool_definition(
+                    "projection.month", 
+                    "📈 Get monthly spending projections",
+                    {
                         "type": "object",
                         "properties": {}
                     }
-                },
-                {
-                    "name": "projection.month", 
-                    "description": "📈 Get monthly spending projections (requires EB auth)",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "transactions.query", 
-                    "description": "💳 Query transactions (requires EB auth)",
-                    "input_schema": {
+                ),
+                self._create_tool_definition(
+                    "transactions.query", 
+                    "💳 Query transactions",
+                    {
                         "type": "object",
                         "properties": {
                             "since": {
@@ -320,15 +265,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                             }
                         }
                     }
-                },
-                {
-                    "name": "enable.banking.sync", 
-                    "description": "🔄 Sync transactions from Enable Banking (requires EB auth)",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                }
+                )
             ]
         }
         self.send_json_result(result, request_id)
@@ -343,15 +280,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         arguments = params.get("arguments", {})
         
         try:
-            if tool_name == "auth.help":
-                result = self._handle_auth_help(arguments)
-            elif tool_name == "enable.banking.banks":
-                result = self._handle_list_banks(arguments)
-            elif tool_name == "enable.banking.auth":
-                result = self._handle_enable_banking_auth(arguments)
-            elif tool_name == "enable.banking.callback":
-                result = self._handle_enable_banking_callback(arguments)
-            elif tool_name == "summary.today":
+            if tool_name == "summary.today":
                 if not access_token:
                     self.send_json_error(-32600, "Access token required", request_id)
                     return
@@ -366,11 +295,6 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                     self.send_json_error(-32600, "Access token required", request_id)
                     return
                 result = self._handle_transactions_query(arguments, access_token)
-            elif tool_name == "enable.banking.sync":
-                if not access_token:
-                    self.send_json_error(-32600, "Access token required", request_id)
-                    return
-                result = self._handle_enable_banking_sync(arguments, access_token)
             else:
                 self.send_json_error(-32601, f"Unknown tool: {tool_name}", request_id)
                 return
