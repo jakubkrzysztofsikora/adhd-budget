@@ -485,6 +485,14 @@ make coverage
 - No commits without passing gates
 - Document failures in compliance matrix
 - Check the yml file, make sure the scripts being run there pass before commiting and pushing
+- **MONITOR DEPLOYMENT**: After EVERY push to main, monitor the GitHub Actions pipeline until completion:
+  ```bash
+  # Check deployment status
+  curl -s "https://api.github.com/repos/jakubkrzysztofsikora/adhd-budget/actions/runs?per_page=1" | jq '.workflow_runs[0] | {status, conclusion}'
+  
+  # Or check via web
+  https://github.com/jakubkrzysztofsikora/adhd-budget/actions
+  ```
 
 ## 13. Enable Banking Setup
 
