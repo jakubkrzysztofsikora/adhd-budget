@@ -26,15 +26,22 @@ services:
       - DAC_OVERRIDE
 
   mcp-server:
-    image: python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
-    user: "1000:1000"
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
     volumes:
-      - ./src:/app
-    working_dir: /app
-    command: python /app/simple_mcp_server.py
+      - ./keys:/app/keys:ro
     environment:
       - MCP_PORT=8081
-      - MCP_AUTH_TOKEN=${MCP_TOKEN}
+      - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
+      - ENABLE_ENV=${ENABLE_ENV:-sandbox}
+      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
+      - ENABLE_APP_ID=${ENABLE_APP_ID}
+      - ENABLE_PRIVATE_KEY_PATH=/app/keys/1ba6d8a6-68f8-4899-b0a4-c8d8a795337b.pem
+      - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
+      - ENABLE_OAUTH_SCOPES=${ENABLE_OAUTH_SCOPES:-accounts transactions}
+    ports:
+      - "8081:8081"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
       interval: 30s
@@ -54,11 +61,20 @@ services:
     user: "1000:1000"
     volumes:
       - ./src:/app
+      - ./keys:/app/keys:ro
     working_dir: /app
-    command: sh -c "echo 'Worker started' && sleep infinity"
+    command: sh -c "export HOME=/tmp && pip install --no-cache-dir --user requests cryptography PyJWT psycopg2-binary schedule && export PATH=/tmp/.local/bin:$PATH && python /app/worker.py"
     environment:
-      - ENABLE_BANKING_KEY=${ENABLE_BANKING_KEY}
-      - ENABLE_BANKING_SECRET=${ENABLE_BANKING_SECRET}
+      - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
+      - ENABLE_ENV=${ENABLE_ENV:-sandbox}
+      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.sandbox.enablebanking.com}
+      - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
+      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=adhd_budget
+      - DB_USER=budget_user
+      - DB_PASSWORD=${DB_PASSWORD}
     restart: unless-stopped
     mem_limit: 256m
     cpus: '0.25'
@@ -91,6 +107,36 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+
+  mcp-inspector:
+    image: node:22-alpine@sha256:6e80991f69cc7722c561e5d14d5e72ab47c0d6b6cfb3ae50fb9cf9a7b30fdf97
+    # Note: Runs as root for package installation (development tool only)
+    working_dir: /app
+    volumes:
+      - ./src:/app/src
+      - ./mcp-config.json:/app/mcp-config.json:ro
+    ports:
+      - "6274:6274"
+      - "6277:6277"
+    environment:
+      - CLIENT_PORT=6274
+      - SERVER_PORT=6277
+      - HOST=0.0.0.0
+      - ALLOWED_ORIGINS=http://localhost:6274,http://host.docker.internal:6274
+      - DANGEROUSLY_OMIT_AUTH=true
+    command: >
+      sh -c "
+        apk add --no-cache git &&
+        npx @modelcontextprotocol/inspector
+      "
+    depends_on:
+      mcp-server:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: '0.25'
+    cap_drop:
+      - ALL
 
   reverse-proxy:
     build:

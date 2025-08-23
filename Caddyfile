@@ -38,6 +38,28 @@
         }
     }
 
+    # OAuth endpoints (well-known, token, callback)
+    handle /.well-known* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+    
+    handle /oauth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+    
+    handle /auth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
     # API endpoints
     handle /api* {
         reverse_proxy api:8082 {

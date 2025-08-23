@@ -9,7 +9,7 @@ import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import os
-from .enable_banking_jwt import EnableBankingJWT
+from enable_banking_jwt import EnableBankingJWT
 
 
 class EnableBankingClient:
@@ -34,20 +34,80 @@ class EnableBankingClient:
         else:
             self.jwt_generator = None
         
+        # Enable Banking uses the same API endpoint for both production and sandbox
+        # The sandbox banks are distinguished by their names (e.g., Mock ASPSP)
+        self.base_url = "https://api.enablebanking.com"
+        
         if sandbox:
-            self.base_url = "https://api.sandbox.enablebanking.com"
             self.aspsp_id = "MOCKASPSP_SANDBOX"
         else:
-            self.base_url = "https://api.enablebanking.com"
             self.aspsp_id = os.environ.get('ENABLE_BANKING_ASPSP_ID')
         
         self.access_token = None
         self.refresh_token = None
         self.consent_id = None
     
+    def initiate_auth(self, aspsp_name: str, aspsp_country: str, redirect_url: str, 
+                     state: str = None, psu_type: str = 'personal') -> Dict[str, Any]:
+        """
+        Initiate Enable Banking authentication for a specific bank
+        
+        Args:
+            aspsp_name: Bank identifier (e.g., 'MOCKASPSP_SANDBOX')
+            aspsp_country: Country code (e.g., 'FI')
+            redirect_url: Callback URL after bank authorization
+            state: Optional state parameter for security
+            psu_type: Type of user ('personal' or 'business')
+        
+        Returns:
+            Authentication response with URL to redirect user
+        """
+        from datetime import datetime, timedelta, timezone
+        
+        # Create JWT for API authentication
+        if not self.jwt_generator:
+            raise ValueError("JWT generator not initialized. Provide app_id and private_key_path")
+        jwt_token = self.jwt_generator.generate_token()
+        
+        # Prepare auth request
+        valid_until = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
+        
+        auth_data = {
+            'access': {
+                'valid_until': valid_until
+            },
+            'aspsp': {
+                'name': aspsp_name,
+                'country': aspsp_country
+            },
+            'redirect_url': redirect_url,
+            'psu_type': psu_type
+        }
+        
+        if state:
+            auth_data['state'] = state
+        
+        # Make request to Enable Banking
+        headers = {
+            'Authorization': f'Bearer {jwt_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(
+            f"{self.base_url}/auth",
+            json=auth_data,
+            headers=headers
+        )
+        
+        if response.status_code != 200:
+            error_data = response.json() if response.text else {}
+            raise Exception(f"Auth initiation failed: {error_data.get('message', response.text)}")
+        
+        return response.json()
+    
     def get_auth_url(self, redirect_uri: str, state: str = None) -> str:
         """
-        Get authorization URL for user consent
+        Get authorization URL for user consent (legacy method for compatibility)
         
         Args:
             redirect_uri: OAuth redirect URI
@@ -56,20 +116,14 @@ class EnableBankingClient:
         Returns:
             Authorization URL
         """
-        params = {
-            'response_type': 'code',
-            'client_id': self.app_id,
-            'redirect_uri': redirect_uri,
-            'scope': 'accounts transactions',
-            'aspsp': self.aspsp_id
-        }
-        
-        if state:
-            params['state'] = state
-        
-        auth_url = f"{self.base_url}/auth/authorize"
-        query_string = '&'.join(f"{k}={v}" for k, v in params.items())
-        return f"{auth_url}?{query_string}"
+        # Use the new initiate_auth method
+        result = self.initiate_auth(
+            aspsp_name=self.aspsp_id if self.aspsp_id else 'MOCKASPSP_SANDBOX',
+            aspsp_country='FI',
+            redirect_url=redirect_uri,
+            state=state
+        )
+        return result.get('url', '')
     
     def exchange_code(self, code: str, redirect_uri: str) -> Dict[str, Any]:
         """

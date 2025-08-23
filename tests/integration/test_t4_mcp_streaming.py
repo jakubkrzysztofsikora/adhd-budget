@@ -25,8 +25,8 @@ class TestT4MCPStreaming:
     @pytest.fixture(scope="class") 
     def mcp_token(self):
         """MCP auth token"""
-        # Use the same token as configured in docker-compose
-        return os.getenv("MCP_TOKEN", "secret")
+        # Use OAuth access token or test token
+        return os.getenv("MCP_TOKEN", "test_mcp_token_secure_2024")
     
     def test_jsonrpc_through_proxy(self, proxy_url, mcp_token):
         """T4: JSON-RPC 2.0 compliance through proxy"""
@@ -66,7 +66,7 @@ class TestT4MCPStreaming:
         """T4: SSE streaming preserved through proxy"""
         # Test SSE endpoint through proxy
         response = requests.get(
-            f"{proxy_url}/mcp/stream",
+            f"{proxy_url}/mcp/sse",
             headers={
                 "Authorization": f"Bearer {mcp_token}",
                 "Accept": "text/event-stream",

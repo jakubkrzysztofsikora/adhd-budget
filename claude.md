@@ -53,16 +53,27 @@ Delivered via WhatsApp Business Cloud API (dedicated number):
 - Outlier flagging (lease, large one-offs) with adjusted "without-outliers" pace
 
 ### MCP Integration
-Claude Desktop/Web Connectors consume these tools:
+Claude Desktop/Web Connectors consume these tools via OAuth-authenticated MCP server:
 - `summary.today` - Current day's financial summary
 - `projection.month` - Monthly spending projections
-- `transactions.query?since=ISO` - Query transactions with date filtering
+- `transactions.query` - Query transactions with date filtering
+- `accounts.list` - List connected bank accounts
+- `spending.categorize` - ML-powered transaction categorization
+- `budget.status` - Budget vs actual comparison
+- `outliers.detect` - Find unusual transactions
+- `savings.forecast` - Project savings potential
+
+**Authentication**: Enable Banking OAuth 2.0 flow with JWT (RS256) for API calls
 
 ## 3. Iterative Roadmap
 
-### Iteration 1 (MVP+1)
-- Revolut integration only
-- Daily WhatsApp summary with projections + outlier detection
+### Iteration 1 (MVP+1) - CURRENT STATUS
+- ✅ Enable Banking OAuth integration (using real API, not mock)
+- ✅ MCP server with 8 financial tools
+- ✅ OAuth discovery and dynamic client registration (RFC 8414/7591)
+- ✅ Session-based authentication (Enable Banking session ID as token)
+- ✅ Docker Compose deployment with Caddy reverse proxy
+- 🚧 Daily WhatsApp summary with projections + outlier detection
 
 ### Iteration 2
 - Polish bank integration
@@ -285,35 +296,64 @@ Impact: -£323 by month end
 ### Overview
 This protocol MUST be executed after each change, feature addition, or bugfix. It validates all Technical (T) and Security (S) gates to ensure system integrity.
 
-### Full Testing Sequence
+### Pre-Commit Testing (Local)
 
 ```bash
-# 1. Quick validation (30 seconds)
-make validate-gates
+# 1. Security validation - MUST PASS before commit
+./tests/shell/scan_git_secrets.sh      # S1: No secrets in code
+./tests/shell/check_compose_security.sh # S4: Container security
 
-# 2. Unit tests - T3 gates (1 minute)
-make test-unit
+# 2. Unit tests (if code changed)
+python -m pytest tests/unit/ -v
 
-# 3. Security audits - S1, S2, S4 gates (2 minutes)
-make audit-secrets
-make audit-compose
-make audit-tls
-
-# 4. Integration tests - T1, T4 gates (3 minutes, requires Docker)
-make test-integration
-
-# 5. Module tests - T2, T5 gates (2 minutes)
-make test-module
-
-# 6. End-to-end tests (5 minutes, requires full stack)
-make test-e2e
-
-# 7. Generate compliance report
-make compliance-check
-
-# 8. Full test suite (includes all above)
-make test
+# 3. Integration tests (if services changed)
+docker compose up -d
+python -m pytest tests/integration/ -v
 ```
+
+### CI/CD Pipeline (GitHub Actions)
+
+Automatically runs on every push to main:
+
+1. **Security Gates:**
+   - S1: Secrets hygiene (`scan_git_secrets.sh`)
+   - S4: Container security (`check_compose_security.sh`)
+
+2. **Technical Gates:**
+   - T1/T4: Docker Compose & MCP integration
+   - T2/T5: Data flow & scheduling  
+   - T3: Unit tests (Python 3.9, 3.10, 3.11)
+
+3. **Deployment (main branch only):**
+   - Archives source files
+   - Transfers to VPS via SSH
+   - Builds Docker images on VPS
+   - Deploys with production environment variables
+
+### Post-Deployment Testing
+
+```bash
+# 1. E2E tests against production
+python3 tests/e2e/test_deployed_instance.py
+
+# 2. MCP Inspector testing
+./setup_mcp_inspector.sh
+# Opens at http://localhost:6274
+# Test with Bearer token: test_mcp_token_secure_2024
+
+# 3. API health check
+curl -H "Authorization: Bearer $API_TOKEN" https://adhdbudget.bieda.it/api/health
+
+# 4. Production monitoring
+curl https://adhdbudget.bieda.it/health
+```
+
+### Authentication Notes
+
+- **MCP Server:** Uses Bearer token authentication (not OAuth)
+- **Enable Banking:** Uses OAuth 2.0 with JWT (RS256)
+- **API:** Bearer token authentication
+- **Production tokens:** Stored as GitHub secrets
 
 ### Gate-Specific Tests
 
@@ -441,11 +481,44 @@ make coverage
 - Document failures in compliance matrix
 - Check the yml file, make sure the scripts being run there pass before commiting and pushing
 
-## 13. Deployment Checklist
+## 13. Enable Banking Setup
+
+### Sandbox Registration (Required for Development)
+1. Register at https://enablebanking.com for a sandbox account
+2. Create an application in the Enable Banking dashboard
+3. Generate RSA key pair for JWT signing:
+   ```bash
+   # Generate private key
+   openssl genrsa -out keys/enablebanking_private.pem 2048
+   
+   # Extract public key
+   openssl rsa -in keys/enablebanking_private.pem -pubout -out keys/enablebanking_public.pem
+   ```
+4. Upload the public key to Enable Banking dashboard
+5. Update `.env` with your credentials:
+   - `ENABLE_APP_ID`: Your application ID from Enable Banking
+   - `ENABLE_PRIVATE_KEY_PATH`: Path to your private key
+   - `ENABLE_API_BASE_URL`: https://api.enablebanking.com
+
+### Authentication Flow
+Enable Banking uses JWT-based authentication with RS256 signing:
+- All API calls require JWT in Authorization header
+- OAuth /auth/authorize endpoint also requires JWT authentication
+- JWT must include: iss="enablebanking.com", aud="api.enablebanking.com", kid=app_id
+- Access tokens are obtained via OAuth authorization code flow after JWT auth
+
+### Important Notes
+- **NO MOCK OAuth**: Always use real Enable Banking API, even in development
+- Sandbox credentials provide full API access with test data
+- JWT authentication is required for ALL endpoints, including OAuth
+- MCP Inspector OAuth flow requires proper Enable Banking sandbox registration
+
+## 14. Deployment Checklist
 
 - [ ] VPS provisioned with Docker/Compose
 - [ ] Domain configured with DNS
-- [ ] Enable Banking API credentials obtained
+- [ ] Enable Banking sandbox account registered
+- [ ] Enable Banking application created with RSA keys
 - [ ] WhatsApp Business account created
 - [ ] SSL certificates auto-renewing
 - [ ] Backup strategy implemented

@@ -121,7 +121,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio aiohttp docker requests
+          pip install pytest pytest-asyncio aiohttp docker requests aiohttp-sse-client
 
       - name: Verify docker-compose exists
         run: |
@@ -236,9 +236,32 @@ jobs:
           echo "Setting up E2E test environment..."
           # Setup steps here
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install E2E test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio aiohttp requests aiohttp-sse-client
+          
       - name: Run E2E tests
         run: |
-          make test-e2e || true
+          export DB_PASSWORD=ci_test_password_2024
+          export MCP_TOKEN=test_mcp_token_secure_2024
+          export API_TOKEN=ci_api_token_2024
+          export TEST_BASE_URL=http://localhost
+          
+          # Start services for E2E
+          docker compose up -d
+          sleep 15
+          
+          # Run Enable Banking OAuth complete test
+          pytest tests/e2e/test_enable_banking_oauth_complete.py -v --tb=short || true
+          
+          # Stop services
+          docker compose down -v
 
       - name: Upload E2E results
         if: always()

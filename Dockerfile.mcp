@@ -1,0 +1,21 @@
+FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
+
+# Install dependencies as root
+RUN pip install --no-cache-dir requests cryptography PyJWT
+
+# Create non-root user
+RUN adduser -D -u 1000 mcpuser
+
+# Create app directory
+WORKDIR /app
+COPY --chown=mcpuser:mcpuser src/ /app/
+
+# Switch to non-root user
+USER mcpuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:8081/health || exit 1
+
+# Start the server
+CMD ["python", "/app/mcp_server_oauth.py"]

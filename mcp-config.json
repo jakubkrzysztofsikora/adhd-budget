@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "adhd-budget": {
+      "transport": {
+        "type": "streamable-http",
+        "uri": "http://host.docker.internal/mcp"
+      }
+    }
+  }
+}
