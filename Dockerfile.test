@@ -28,6 +28,7 @@ RUN pip install --no-cache-dir \
     vcrpy \
     pyyaml \
     pyjwt \
+    cryptography \
     pg8000
 
 WORKDIR /app
