@@ -426,6 +426,8 @@ make coverage
 3. **NEVER** create additional files when an existing file can be modified
 4. Only create NEW files when there is NO existing similar file that can be changed
 5. Always prefer editing existing files over creating new ones
+6. **NEVER USE continue-on-error** - Fix the actual problems, don't hide them
+7. **NO CHEATING** - If a test fails, fix the root cause, don't skip or ignore it
 
 ### File Creation Policy
 - **DO NOT** create additional shell scripts unless explicitly requested

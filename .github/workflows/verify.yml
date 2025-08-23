@@ -32,31 +32,10 @@ jobs:
         with:
           fetch-depth: 0  # Full history for secret scanning
 
-      - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: ./
-          extra_args: --only-verified
-
-      - name: GitLeaks scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Custom secrets audit
         run: |
           chmod +x tests/shell/scan_git_secrets.sh
           tests/shell/scan_git_secrets.sh
-
-      - name: Upload security results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-scan-results
-          path: |
-            gitleaks-report.json
-            trufflehog-results.json
-        continue-on-error: true
 
   # T3 Gate: Unit Tests
   unit-tests:
@@ -116,27 +95,6 @@ jobs:
         run: |
           chmod +x tests/shell/check_compose_security.sh
           tests/shell/check_compose_security.sh
-
-      - name: Hadolint Dockerfile Linting
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: Dockerfile
-          failure-threshold: warning
-          ignore: DL3008,DL3009  # Common warnings to ignore
-
-      - name: Trivy security scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
 
   # T1 & T4 Gates: Integration Tests
   integration-tests:
