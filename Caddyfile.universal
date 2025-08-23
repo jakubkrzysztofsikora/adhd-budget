@@ -1,0 +1,70 @@
+# Universal Caddy configuration - works for both local and production
+:80 {
+    # Health endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # MCP Server with SSE support
+    handle /mcp* {
+        reverse_proxy mcp-server:8081 {
+            # Disable buffering for SSE
+            flush_interval -1
+            
+            # Headers for SSE
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+            
+            # Pass proxy headers - production will override these
+            @has_forwarded_proto header X-Forwarded-Proto *
+            header_up @has_forwarded_proto X-Forwarded-Proto {header.X-Forwarded-Proto}
+            @no_forwarded_proto not header X-Forwarded-Proto *
+            header_up @no_forwarded_proto X-Forwarded-Proto {scheme}
+            
+            @has_forwarded_host header X-Forwarded-Host *
+            header_up @has_forwarded_host X-Forwarded-Host {header.X-Forwarded-Host}
+            @no_forwarded_host not header X-Forwarded-Host *
+            header_up @no_forwarded_host X-Forwarded-Host {host}
+        }
+    }
+
+    # OAuth endpoints (well-known, token, callback)
+    handle /.well-known* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {header.X-Forwarded-Proto:scheme}
+            header_up X-Forwarded-Host {header.X-Forwarded-Host:host}
+        }
+    }
+    
+    handle /oauth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {header.X-Forwarded-Proto:scheme}
+            header_up X-Forwarded-Host {header.X-Forwarded-Host:host}
+        }
+    }
+    
+    handle /auth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {header.X-Forwarded-Proto:scheme}
+            header_up X-Forwarded-Host {header.X-Forwarded-Host:host}
+        }
+    }
+
+    # API endpoints
+    handle /api* {
+        reverse_proxy api:8082 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {header.X-Forwarded-Proto:scheme}
+            header_up X-Forwarded-Host {header.X-Forwarded-Host:host}
+        }
+    }
+
+    # Default handler
+    handle {
+        respond "ADHD Budget Assistant" 200
+    }
+}

@@ -356,7 +356,7 @@ jobs:
 
       - name: Create deployment archive
         run: |
-          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.cloudflare .env.example
+          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.test .env.example
           
       - name: Copy deployment archive to VPS
         uses: appleboy/scp-action@v0.1.5
@@ -382,11 +382,9 @@ jobs:
             tar -xzf deploy.tar.gz -C adhd-budget/
             cd adhd-budget
             
-            # Use Cloudflare-aware Caddyfile for production
-            if [ -f Caddyfile.cloudflare ]; then
-              mv Caddyfile.cloudflare Caddyfile
-            elif [ -f Caddyfile.prod ]; then
-              mv Caddyfile.prod Caddyfile
+            # Use test Caddyfile (it was working before)
+            if [ -f Caddyfile.test ]; then
+              mv Caddyfile.test Caddyfile
             fi
             
             # Create private key file if provided

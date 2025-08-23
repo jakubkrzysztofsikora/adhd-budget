@@ -1,8 +1,5 @@
-# Production Caddy configuration when behind Cloudflare proxy
-# Cloudflare handles SSL termination, Caddy handles HTTP only
-
+# Simple universal Caddy configuration
 :80 {
-
     # Health endpoint
     handle /health {
         respond "OK" 200
@@ -18,40 +15,40 @@
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
             header_down X-Accel-Buffering no
-            
-            # Pass Cloudflare headers - force HTTPS since CF handles SSL
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {header.Host}
         }
     }
 
     # OAuth endpoints (well-known, token, callback)
     handle /.well-known* {
         reverse_proxy mcp-server:8081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {header.Host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
     
     handle /oauth* {
         reverse_proxy mcp-server:8081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {header.Host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
     
     handle /auth* {
         reverse_proxy mcp-server:8081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {header.Host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
 
     # API endpoints
     handle /api* {
         reverse_proxy api:8082 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {header.Host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
 
