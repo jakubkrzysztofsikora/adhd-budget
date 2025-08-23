@@ -36,6 +36,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"OK")
         
+        elif self.path.startswith("/api/banks"):
+            # API endpoint to get banks from Enable Banking
+            self._handle_banks_api()
+        
         elif self.path.startswith("/.well-known/oauth-authorization-server"):
             # OAuth 2.0 Authorization Server Metadata (RFC 8414)
             self._handle_oauth_discovery()
@@ -692,6 +696,109 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
             time.sleep(0.5)
     
+    def _handle_banks_api(self):
+        """Handle banks API request - proxy to Enable Banking ASPSPs endpoint"""
+        from urllib.parse import urlparse, parse_qs
+        import requests
+        
+        # Parse query parameters
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        country = params.get('country', ['FI'])[0]
+        
+        try:
+            # Get Enable Banking JWT token
+            from enable_banking_jwt import EnableBankingJWT
+            app_id = os.environ.get('ENABLE_APP_ID')
+            private_key_path = os.environ.get('ENABLE_PRIVATE_KEY_PATH')
+            
+            if not app_id or not private_key_path:
+                # Return hardcoded sandbox banks if no credentials
+                sandbox_banks = {
+                    'FI': [
+                        {'name': 'MOCKASPSP_SANDBOX', 'country': 'FI', 'display': 'Mock ASPSP (Sandbox)'},
+                        {'name': 'Nordea', 'country': 'FI', 'display': 'Nordea (Sandbox)'},
+                        {'name': 'OP', 'country': 'FI', 'display': 'OP Financial Group (Sandbox)'}
+                    ],
+                    'SE': [
+                        {'name': 'MOCKASPSP_SANDBOX', 'country': 'SE', 'display': 'Mock ASPSP (Sandbox)'},
+                        {'name': 'SEB', 'country': 'SE', 'display': 'SEB (Sandbox)'},
+                        {'name': 'Swedbank', 'country': 'SE', 'display': 'Swedbank (Sandbox)'}
+                    ],
+                    'NO': [
+                        {'name': 'MOCKASPSP_SANDBOX', 'country': 'NO', 'display': 'Mock ASPSP (Sandbox)'},
+                        {'name': 'DNB', 'country': 'NO', 'display': 'DNB (Sandbox)'}
+                    ],
+                    'DK': [
+                        {'name': 'MOCKASPSP_SANDBOX', 'country': 'DK', 'display': 'Mock ASPSP (Sandbox)'},
+                        {'name': 'Danske', 'country': 'DK', 'display': 'Danske Bank (Sandbox)'}
+                    ]
+                }
+                
+                banks = sandbox_banks.get(country, [])
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({'banks': banks}).encode())
+                return
+            
+            # Create JWT for Enable Banking API
+            jwt_generator = EnableBankingJWT(app_id, private_key_path)
+            jwt_token = jwt_generator.generate_token()
+            
+            # Call Enable Banking ASPSPs endpoint
+            headers = {
+                'Authorization': f'Bearer {jwt_token}',
+                'Accept': 'application/json'
+            }
+            
+            # Filter by country if specified
+            url = f"https://api.enablebanking.com/aspsps?country={country}"
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Transform the response to include display names
+                banks = []
+                for aspsp in data.get('aspsps', []):
+                    if aspsp.get('sandbox', False):  # Only show sandbox banks
+                        banks.append({
+                            'name': aspsp.get('name'),
+                            'country': aspsp.get('country'),
+                            'display': f"{aspsp.get('name')} (Sandbox)"
+                        })
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({'banks': banks}).encode())
+            else:
+                # Return error but with fallback banks
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': f'Enable Banking API error: {response.status_code}',
+                    'banks': [{'name': 'MOCKASPSP_SANDBOX', 'country': country, 'display': 'Mock ASPSP (Sandbox)'}]
+                }).encode())
+                
+        except Exception as e:
+            logger.error(f"Banks API error: {str(e)}")
+            # Return fallback banks on error
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'error': str(e),
+                'banks': [{'name': 'MOCKASPSP_SANDBOX', 'country': country, 'display': 'Mock ASPSP (Sandbox)'}]
+            }).encode())
+    
     def _handle_oauth_discovery(self):
         """Handle OAuth 2.0 Authorization Server Metadata discovery (RFC 8414)"""
         # Get the base URL for this server, respecting proxy headers
@@ -1018,33 +1125,39 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
                     
                     function loadBanks() {
                         const country = document.getElementById('country').value;
-                        fetch('/mcp', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                jsonrpc: '2.0',
-                                method: 'tools/call',
-                                params: {
-                                    name: 'enable.banking.banks',
-                                    arguments: { country: country }
-                                },
-                                id: '2'
-                            })
-                        })
-                        .then(res => res.json())
-                        .then(data => {
-                            const select = document.getElementById('bank');
-                            select.innerHTML = '<option value="">Select a bank...</option>';
-                            
-                            if (data.result && data.result.banks) {
-                                data.result.banks.forEach(bank => {
+                        const select = document.getElementById('bank');
+                        select.innerHTML = '<option value="">Loading banks...</option>';
+                        
+                        // Call our API endpoint which proxies to Enable Banking
+                        fetch('/api/banks?country=' + country)
+                            .then(res => res.json())
+                            .then(data => {
+                                select.innerHTML = '<option value="">Select a bank...</option>';
+                                
+                                if (data.banks && data.banks.length > 0) {
+                                    data.banks.forEach(bank => {
+                                        const option = document.createElement('option');
+                                        option.value = bank.name;
+                                        option.text = bank.display || bank.name;
+                                        select.appendChild(option);
+                                    });
+                                } else {
+                                    // Fallback to Mock ASPSP if no banks returned
                                     const option = document.createElement('option');
-                                    option.value = bank.name;
-                                    option.text = bank.name;
+                                    option.value = 'MOCKASPSP_SANDBOX';
+                                    option.text = 'Mock ASPSP (Sandbox)';
                                     select.appendChild(option);
-                                });
-                            }
-                        });
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Failed to load banks:', err);
+                                select.innerHTML = '<option value="">Select a bank...</option>';
+                                // Add Mock ASPSP as fallback
+                                const option = document.createElement('option');
+                                option.value = 'MOCKASPSP_SANDBOX';
+                                option.text = 'Mock ASPSP (Sandbox)';
+                                select.appendChild(option);
+                            });
                     }
                 </script>
             </head>
