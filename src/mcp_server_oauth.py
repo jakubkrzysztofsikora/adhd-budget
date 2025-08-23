@@ -78,6 +78,8 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             self._handle_oauth_authorize_submit()
         elif self.path.startswith("/oauth/token"):
             self._handle_oauth_token()
+        elif self.path.startswith("/oauth/revoke"):
+            self._handle_oauth_revoke()
         elif self.path.startswith("/oauth/register"):
             self._handle_client_registration()
         else:
@@ -824,7 +826,8 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             "registration_endpoint": f"{base_url}/oauth/register",  # Local registration for MCP Inspector
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
-            "code_challenge_methods_supported": ["S256"],
+            "code_challenge_methods_supported": ["S256", "plain"],
+            "revocation_endpoint": f"{base_url}/oauth/revoke",
             "scopes_supported": ["accounts", "transactions"],
             "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
             "authorization_response_iss_parameter_supported": True,
@@ -870,7 +873,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(resource_data, indent=2).encode())
     
     def _handle_oauth_token(self):
-        """Handle OAuth 2.0 token endpoint - proxy to Enable Banking"""
+        """Handle OAuth 2.0 token endpoint with PKCE and refresh token support"""
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
@@ -881,25 +884,47 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             form_data = parse_qs(body.decode('utf-8'))
             
             grant_type = form_data.get('grant_type', [''])[0]
-            code = form_data.get('code', [''])[0]
-            redirect_uri = form_data.get('redirect_uri', [''])[0]
             
-            if grant_type != 'authorization_code' or not code:
-                self.send_json_error_oauth("invalid_request", "Missing or invalid parameters")
+            if grant_type == 'refresh_token':
+                # Handle refresh token request
+                refresh_token = form_data.get('refresh_token', [''])[0]
+                if not refresh_token:
+                    self.send_json_error_oauth("invalid_request", "Missing refresh_token")
+                    return
+                
+                # For Enable Banking, we can't actually refresh - just return the same session
+                oauth_response = {
+                    "access_token": refresh_token,  # Same session ID
+                    "token_type": "Bearer",
+                    "expires_in": 86400,  # 24 hours
+                    "refresh_token": refresh_token,  # Keep same refresh token
+                    "scope": "accounts transactions"
+                }
+            elif grant_type == 'authorization_code':
+                code = form_data.get('code', [''])[0]
+                redirect_uri = form_data.get('redirect_uri', [''])[0]
+                code_verifier = form_data.get('code_verifier', [''])[0]  # PKCE support
+                
+                if not code:
+                    self.send_json_error_oauth("invalid_request", "Missing code")
+                    return
+                
+                # TODO: In production, verify PKCE code_verifier against stored code_challenge
+                if code_verifier:
+                    logger.info(f"PKCE code_verifier received: {code_verifier[:20]}...")
+                
+                # Enable Banking uses session-based auth, not OAuth tokens
+                # We treat the session ID as both access and refresh token
+                oauth_response = {
+                    "access_token": code,  # Session ID as access token
+                    "token_type": "Bearer",
+                    "expires_in": 86400,  # 24 hours
+                    "refresh_token": code,  # Same session ID as refresh token
+                    "scope": "accounts transactions"
+                }
+            else:
+                self.send_json_error_oauth("unsupported_grant_type", f"Grant type '{grant_type}' not supported")
                 return
-            
-            # Enable Banking doesn't use OAuth token exchange - it uses session-based auth
-            # The "code" is actually the session ID from Enable Banking
-            # We'll treat the session ID as the access token for MCP Inspector compatibility
-            
-            # Generate a mock OAuth response that MCP Inspector expects
-            # but use the Enable Banking session ID as the token
-            oauth_response = {
-                "access_token": code,  # Use the session ID as the access token
-                "token_type": "Bearer",
-                "expires_in": 86400,  # 24 hours
-                "scope": "accounts transactions"
-            }
             
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -912,6 +937,46 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.error(f"OAuth token exchange error: {str(e)}")
             self.send_json_error_oauth("server_error", f"Token exchange failed: {str(e)}")
+    
+    def _handle_oauth_revoke(self):
+        """Handle OAuth 2.0 token revocation endpoint"""
+        # Read request body
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        
+        try:
+            # Parse form data
+            from urllib.parse import parse_qs
+            form_data = parse_qs(body.decode('utf-8'))
+            
+            token = form_data.get('token', [''])[0]
+            token_type_hint = form_data.get('token_type_hint', [''])[0]
+            
+            if not token:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "invalid_request"}).encode())
+                return
+            
+            # For Enable Banking, we can't actually revoke sessions
+            # Just acknowledge the revocation request
+            logger.info(f"Token revocation requested for: {token[:20]}... (type: {token_type_hint})")
+            
+            # Return 200 OK as per RFC 7009
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Pragma", "no-cache")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            
+        except Exception as e:
+            logger.error(f"Token revocation error: {str(e)}")
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "server_error"}).encode())
     
     def send_json_error_oauth(self, error_code: str, error_description: str):
         """Send OAuth 2.0 error response"""
