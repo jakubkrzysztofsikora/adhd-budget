@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# Pre-commit hook for ADHD Budget Assistant
+# Runs the full testing protocol from claude.md
+# Rejects commit if any tests fail
+#
+
+set -e  # Exit on error
+
+echo "🔍 Running pre-commit testing protocol..."
+echo "==========================================="
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Track failures
+FAILED=0
+
+# S1: Security validation - Check for secrets
+echo -e "\n${YELLOW}[S1] Checking for secrets in git...${NC}"
+if ./tests/shell/scan_git_secrets.sh > /tmp/pre-commit-s1.log 2>&1; then
+    echo -e "${GREEN}✓ S1 PASSED: No secrets found${NC}"
+else
+    echo -e "${RED}✗ S1 FAILED: Secrets detected! See /tmp/pre-commit-s1.log${NC}"
+    FAILED=1
+fi
+
+# S4: Container security
+echo -e "\n${YELLOW}[S4] Checking container security...${NC}"
+if ./tests/shell/check_compose_security.sh > /tmp/pre-commit-s4.log 2>&1; then
+    echo -e "${GREEN}✓ S4 PASSED: Container security OK${NC}"
+else
+    echo -e "${RED}✗ S4 FAILED: Container security issues! See /tmp/pre-commit-s4.log${NC}"
+    FAILED=1
+fi
+
+# Unit tests (T3: Intelligence accuracy)
+echo -e "\n${YELLOW}[T3] Running unit tests...${NC}"
+if python3 -m pytest tests/unit/ -q --tb=no > /tmp/pre-commit-unit.log 2>&1; then
+    UNIT_COUNT=$(grep -o "passed" /tmp/pre-commit-unit.log | wc -l | xargs)
+    echo -e "${GREEN}✓ T3 PASSED: ${UNIT_COUNT} unit tests passed${NC}"
+else
+    echo -e "${RED}✗ T3 FAILED: Unit tests failed! See /tmp/pre-commit-unit.log${NC}"
+    FAILED=1
+fi
+
+# Integration tests in Docker (T1, T4, OAuth)
+echo -e "\n${YELLOW}[T1/T4] Running integration tests...${NC}"
+echo "This may take up to 30 seconds..."
+
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+    echo -e "${YELLOW}⚠ Docker not running, skipping integration tests${NC}"
+    echo -e "${YELLOW}  Run manually: DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/integration/ -q${NC}"
+else
+    # Check if DB_PASSWORD is set
+    if [ -z "$DB_PASSWORD" ]; then
+        export DB_PASSWORD=testdupa123!
+    fi
+    
+    if DB_PASSWORD=$DB_PASSWORD docker compose run --rm test-runner pytest tests/integration/ -q --tb=no > /tmp/pre-commit-integration.log 2>&1; then
+        INT_PASSED=$(grep -o "passed" /tmp/pre-commit-integration.log | wc -l | xargs)
+        INT_SKIPPED=$(grep -o "skipped" /tmp/pre-commit-integration.log | wc -l | xargs)
+        echo -e "${GREEN}✓ T1/T4 PASSED: ${INT_PASSED} passed, ${INT_SKIPPED} skipped${NC}"
+    else
+        echo -e "${RED}✗ T1/T4 FAILED: Integration tests failed! See /tmp/pre-commit-integration.log${NC}"
+        FAILED=1
+    fi
+fi
+
+# Summary
+echo "==========================================="
+if [ $FAILED -eq 0 ]; then
+    echo -e "${GREEN}✅ All tests passed! Proceeding with commit.${NC}"
+    exit 0
+else
+    echo -e "${RED}❌ Tests failed! Commit rejected.${NC}"
+    echo -e "${RED}Fix the issues and try again.${NC}"
+    echo ""
+    echo "Log files:"
+    echo "  - /tmp/pre-commit-s1.log"
+    echo "  - /tmp/pre-commit-s4.log"
+    echo "  - /tmp/pre-commit-unit.log"
+    echo "  - /tmp/pre-commit-integration.log"
+    echo ""
+    echo "To bypass (NOT RECOMMENDED):"
+    echo "  git commit --no-verify"
+    exit 1
+fi
