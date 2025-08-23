@@ -56,6 +56,7 @@ jobs:
           path: |
             gitleaks-report.json
             trufflehog-results.json
+        continue-on-error: true
 
   # T3 Gate: Unit Tests
   unit-tests:
@@ -175,12 +176,17 @@ jobs:
 
       - name: Start services
         run: |
+          # Set required environment variables for CI
+          export DB_PASSWORD=ci_test_password_2024
+          export MCP_TOKEN=ci_mcp_token_2024
+          export API_TOKEN=ci_api_token_2024
           docker compose up -d
           sleep 10
           docker compose ps
 
       - name: Run integration tests
         run: |
+          export DB_PASSWORD=ci_test_password_2024
           pytest tests/integration/ -v --tb=short --timeout=120 \
             --junitxml=reports/integration-results.xml || true
 
