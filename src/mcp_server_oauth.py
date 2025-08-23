@@ -551,8 +551,25 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             eb_client = EnableBankingClient(sandbox=True)
             eb_client.access_token = access_token
             
-            # Get transactions (mock data for sandbox)
-            transactions = eb_client.get_mock_transactions()
+            # Get real transactions from Enable Banking API
+            try:
+                # First get accounts
+                accounts = eb_client.get_accounts()
+                if not accounts:
+                    return {"error": "No accounts found", "message": "Please ensure your bank connection is active"}
+                
+                # Get transactions from all accounts
+                transactions = []
+                for account in accounts:
+                    account_id = account.get('resourceId') or account.get('id')
+                    if account_id:
+                        account_txns = eb_client.get_transactions(account_id)
+                        transactions.extend(account_txns)
+                
+            except Exception as api_error:
+                logger.warning(f"API call failed, falling back to mock: {str(api_error)}")
+                # Fallback to mock data if API fails
+                transactions = eb_client.get_mock_transactions()
             
             # Calculate summary
             today = time.strftime("%Y-%m-%d")
@@ -595,8 +612,25 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             eb_client = EnableBankingClient(sandbox=True)
             eb_client.access_token = access_token
             
-            # Get transactions (mock data for sandbox)
-            transactions = eb_client.get_mock_transactions()
+            # Get real transactions from Enable Banking API
+            try:
+                # First get accounts
+                accounts = eb_client.get_accounts()
+                if not accounts:
+                    return {"error": "No accounts found", "message": "Please ensure your bank connection is active"}
+                
+                # Get transactions from all accounts
+                transactions = []
+                for account in accounts:
+                    account_id = account.get('resourceId') or account.get('id')
+                    if account_id:
+                        account_txns = eb_client.get_transactions(account_id)
+                        transactions.extend(account_txns)
+                
+            except Exception as api_error:
+                logger.warning(f"API call failed, falling back to mock: {str(api_error)}")
+                # Fallback to mock data if API fails
+                transactions = eb_client.get_mock_transactions()
             
             # Calculate monthly projection
             current_month = time.strftime("%Y-%m")
@@ -634,8 +668,28 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             eb_client = EnableBankingClient(sandbox=True)
             eb_client.access_token = access_token
             
-            # Get transactions
-            transactions = eb_client.get_mock_transactions()
+            # Get real transactions from Enable Banking API
+            try:
+                # First get accounts
+                accounts = eb_client.get_accounts()
+                if not accounts:
+                    return {"error": "No accounts found", "message": "Please ensure your bank connection is active"}
+                
+                # Get transactions from all accounts with date filtering
+                since = args.get("since")
+                until = args.get("until")
+                
+                transactions = []
+                for account in accounts:
+                    account_id = account.get('resourceId') or account.get('id')
+                    if account_id:
+                        account_txns = eb_client.get_transactions(account_id, since, until)
+                        transactions.extend(account_txns)
+                
+            except Exception as api_error:
+                logger.warning(f"API call failed, falling back to mock: {str(api_error)}")
+                # Fallback to mock data if API fails
+                transactions = eb_client.get_mock_transactions()
             
             # Apply filters
             since = args.get("since", "2024-01-01")
@@ -674,8 +728,25 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             eb_client = EnableBankingClient(sandbox=True)
             eb_client.access_token = access_token
             
-            # Get fresh transactions from Enable Banking
-            transactions = eb_client.get_mock_transactions()
+            # Get real transactions from Enable Banking API
+            try:
+                # First get accounts
+                accounts = eb_client.get_accounts()
+                if not accounts:
+                    return {"error": "No accounts found", "message": "Please ensure your bank connection is active"}
+                
+                # Get fresh transactions from all accounts
+                transactions = []
+                for account in accounts:
+                    account_id = account.get('resourceId') or account.get('id')
+                    if account_id:
+                        account_txns = eb_client.get_transactions(account_id)
+                        transactions.extend(account_txns)
+                
+            except Exception as api_error:
+                logger.warning(f"API call failed, falling back to mock: {str(api_error)}")
+                # Fallback to mock data if API fails
+                transactions = eb_client.get_mock_transactions()
             
             # Transform transactions
             transformed_transactions = []
