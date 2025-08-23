@@ -371,12 +371,18 @@ jobs:
             # Clean up tar files
             rm -f api.tar proxy.tar app.tar
             
+            # Create private key file if provided
+            if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
+              echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > /home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem
+              chmod 600 /home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem
+            fi
+            
             # Set up environment variables
             export DB_PASSWORD="${{ secrets.PROD_DB_PASSWORD }}"
             export MCP_TOKEN="${{ secrets.PROD_MCP_TOKEN }}"
             export API_TOKEN="${{ secrets.PROD_API_TOKEN }}"
             export ENABLE_APP_ID="${{ secrets.ENABLE_APP_ID }}"
-            export ENABLE_PRIVATE_KEY_PATH="${{ secrets.ENABLE_PRIVATE_KEY_PATH }}"
+            export ENABLE_PRIVATE_KEY_PATH="/home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem"
             export ENABLE_API_URL="${{ secrets.ENABLE_API_URL }}"
             export DOMAIN="${{ secrets.DOMAIN }}"
             export ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
