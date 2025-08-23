@@ -739,20 +739,65 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             return {"error": f"Failed to sync transactions: {str(e)}"}
     
     def _handle_sse_stream(self):
-        """Handle SSE streaming endpoint"""
+        """Handle SSE streaming endpoint for MCP - proper long-lived connection"""
+        # Set up SSE headers for long-lived streaming
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "keep-alive")  # Keep connection alive
         self.send_header("X-Accel-Buffering", "no")  # Disable proxy buffering
+        self.send_header("Access-Control-Allow-Origin", "*")  # Allow CORS
         self.end_headers()
         
-        # Send test events to verify streaming works
-        for i in range(3):
-            event = f"data: {{\"event\": \"test\", \"data\": \"Stream event {i+1}\", \"timestamp\": \"{time.time()}\"}}\n\n"
-            self.wfile.write(event.encode())
-            self.wfile.flush()
-            time.sleep(0.5)
+        try:
+            # Send initial connection event
+            self._send_sse_event("connected", {"status": "SSE connection established"})
+            
+            # Send a few initial events to demonstrate streaming
+            for i in range(3):
+                time.sleep(0.3)  # Delay between events
+                event_data = {
+                    "type": "progress",
+                    "message": f"Stream event {i+1}",
+                    "timestamp": time.time()
+                }
+                self._send_sse_event(f"event_{i+1}", event_data)
+            
+            # SSE connections should stay open for continuous streaming
+            # Send heartbeat/keepalive events periodically
+            heartbeat_count = 0
+            while True:
+                time.sleep(5)  # Send heartbeat every 5 seconds
+                heartbeat_count += 1
+                self._send_sse_event("heartbeat", {"count": heartbeat_count, "timestamp": time.time()})
+                
+                # Check if connection is still alive
+                if self.wfile.closed:
+                    break
+                    
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Client disconnected, that's normal for SSE
+            logger.debug("SSE client disconnected")
+        except Exception as e:
+            logger.error(f"SSE stream error: {e}")
+        finally:
+            # Cleanup
+            try:
+                self.wfile.flush()
+            except:
+                pass
+    
+    def _send_sse_event(self, event_type: str, data: Any):
+        """Send an SSE event with proper formatting"""
+        if isinstance(data, dict):
+            data_str = json.dumps(data)
+        else:
+            data_str = str(data)
+        
+        # SSE format: "event: <type>\ndata: <data>\n\n"
+        event = f"event: {event_type}\ndata: {data_str}\n\n"
+        self.wfile.write(event.encode('utf-8'))
+        self.wfile.flush()
     
     def _handle_banks_api(self):
         """Handle banks API request - proxy to Enable Banking ASPSPs endpoint"""

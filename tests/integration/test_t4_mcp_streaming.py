@@ -63,27 +63,68 @@ class TestT4MCPStreaming:
             assert "transactions.query" in tool_names
     
     def test_sse_streaming_through_proxy(self, proxy_url, mcp_token):
-        """T4: SSE streaming preserved through proxy"""
-        # Our MCP server uses JSON-RPC over HTTP, not SSE
-        # Skip SSE test as it's not implemented
-        pytest.skip("SSE endpoint not implemented - MCP uses JSON-RPC over HTTP")
+        """T4: SSE streaming preserved through proxy - proper long-lived connection"""
+        # Test SSE endpoint through proxy
+        response = requests.get(
+            f"{proxy_url}/mcp/stream",
+            headers={
+                "Authorization": f"Bearer {mcp_token}",
+                "Accept": "text/event-stream"
+            },
+            stream=True,
+            timeout=10  # Reasonable timeout for initial events
+        )
         
-        # Verify no buffering (chunks arrive immediately)
-        chunks_with_timing = []
-        start_time = time.time()
+        try:
+            assert response.status_code == 200
+            assert response.headers.get("Content-Type") == "text/event-stream"
+            
+            # Collect initial events to verify SSE is working
+            chunks_with_timing = []
+            start_time = time.time()
+            
+            # Read events for up to 2 seconds to get initial events
+            for line in response.iter_lines(decode_unicode=True):
+                if line:
+                    arrival_time = time.time() - start_time
+                    chunks_with_timing.append((arrival_time, line))
+                    
+                    # Collect at least 6 events (connected + 3 progress events + formatting)
+                    # or stop after 2 seconds
+                    if len(chunks_with_timing) >= 6 or arrival_time > 2:
+                        break
+            
+            # Verify we received SSE events
+            assert len(chunks_with_timing) >= 4, f"Not enough SSE events received: {len(chunks_with_timing)}"
+            
+            # Verify events are properly formatted (event: or data:)
+            event_lines = 0
+            data_lines = 0
+            for _, chunk in chunks_with_timing:
+                if chunk.startswith('event:'):
+                    event_lines += 1
+                elif chunk.startswith('data:'):
+                    data_lines += 1
+                elif chunk.strip():  # Non-empty lines should be SSE formatted
+                    assert False, f"Invalid SSE format: {chunk}"
+            
+            assert event_lines >= 2, f"Not enough event lines: {event_lines}"
+            assert data_lines >= 2, f"Not enough data lines: {data_lines}"
+            
+            # Verify chunks arrived over time (streaming not buffered)
+            # Find actual data events (pairs of event: and data: lines)
+            event_times = [t for t, c in chunks_with_timing if c.startswith('event:')]
+            if len(event_times) >= 2:
+                time_diff = event_times[1] - event_times[0]
+                assert time_diff > 0.2, f"Events arrived too quickly (buffered): {time_diff}s"
+            
+            # Verify the SSE connection would stay alive (it's sending heartbeats)
+            # but we don't wait for them in the test
         
-        for line in response.iter_lines():
-            if line:
-                arrival_time = time.time() - start_time
-                chunks_with_timing.append((arrival_time, line.decode('utf-8')))
-                
-                if len(chunks_with_timing) >= 3:
-                    break
-        
-        # Verify chunks arrived over time (not all at once)
-        if len(chunks_with_timing) >= 2:
-            time_diff = chunks_with_timing[1][0] - chunks_with_timing[0][0]
-            assert time_diff > 0.05, "Chunks buffered (arrived too quickly)"
+        finally:
+            # Force close the long-lived SSE connection
+            # This is expected for SSE - client decides when to disconnect
+            response.close()
     
     def test_no_websocket_usage(self, proxy_url):
         """T4: Verify WebSockets are NOT used"""

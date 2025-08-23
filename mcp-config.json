@@ -4,6 +4,13 @@
       "transport": {
         "type": "streamable-http",
         "uri": "http://host.docker.internal/mcp"
+      },
+      "auth": {
+        "type": "oauth2",
+        "authorization_url": "http://host.docker.internal/oauth/authorize",
+        "token_url": "http://host.docker.internal/oauth/token",
+        "client_id": "mcp-inspector",
+        "scopes": ["transactions", "accounts"]
       }
     }
   }
