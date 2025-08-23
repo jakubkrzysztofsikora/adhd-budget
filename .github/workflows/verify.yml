@@ -359,6 +359,83 @@ jobs:
               body: matrix
             });
 
+  # Deployment to VPS
+  deploy-to-vps:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, unit-tests, container-security, integration-tests, module-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker images
+        run: |
+          # Build all required images
+          docker build -f Dockerfile.api -t adhd-budget-api:latest .
+          docker build -f Dockerfile.caddy-secure -t adhd-budget-proxy:latest .
+          docker build -f Dockerfile -t adhd-budget-app:latest .
+          
+          # Save images as tar files
+          docker save adhd-budget-api:latest -o api.tar
+          docker save adhd-budget-proxy:latest -o proxy.tar
+          docker save adhd-budget-app:latest -o app.tar
+
+      - name: Copy images and compose file to VPS
+        uses: appleboy/scp-action@v0.1.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_SSH_PASSWORD }}
+          port: ${{ secrets.VPS_SSH_PORT }}
+          source: "api.tar,proxy.tar,app.tar,docker-compose.yml,.env.example,src/,Caddyfile.test"
+          target: "/home/${{ secrets.VPS_USER }}/adhd-budget"
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_SSH_PASSWORD }}
+          port: ${{ secrets.VPS_SSH_PORT }}
+          script: |
+            cd /home/${{ secrets.VPS_USER }}/adhd-budget
+            
+            # Load Docker images
+            docker load -i api.tar
+            docker load -i proxy.tar
+            docker load -i app.tar
+            
+            # Clean up tar files
+            rm -f api.tar proxy.tar app.tar
+            
+            # Set up environment variables
+            export DB_PASSWORD="${{ secrets.PROD_DB_PASSWORD }}"
+            export MCP_TOKEN="${{ secrets.PROD_MCP_TOKEN }}"
+            export API_TOKEN="${{ secrets.PROD_API_TOKEN }}"
+            export ENABLE_APP_ID="${{ secrets.ENABLE_APP_ID }}"
+            export ENABLE_PRIVATE_KEY_PATH="${{ secrets.ENABLE_PRIVATE_KEY_PATH }}"
+            export ENABLE_API_URL="${{ secrets.ENABLE_API_URL }}"
+            export DOMAIN="${{ secrets.DOMAIN }}"
+            export ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
+            
+            # Stop existing containers
+            docker compose down || true
+            
+            # Start services
+            docker compose up -d
+            
+            # Health check
+            sleep 10
+            docker compose ps
+            
+            # Verify services are running
+            docker ps --filter "status=running" --filter "name=adhd-budget" --format "table {{.Names}}\t{{.Status}}"
+
   # Final Status Check
   gates-status:
     name: Gates Status Check
