@@ -126,7 +126,7 @@ class TestT1ComposeResilience:
             port=int(os.getenv("DB_PORT", 5432)),
             database=os.getenv("DB_NAME", "adhd_budget"),
             user=os.getenv("DB_USER", "budget_user"),
-            password=os.getenv("DB_PASSWORD", "changeme")
+            password=os.getenv("DB_PASSWORD")
         )
         
         try:

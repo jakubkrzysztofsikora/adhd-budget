@@ -420,6 +420,13 @@ make coverage
 
 ## 12. Development Constraints
 
+### CRITICAL DEVELOPMENT RULES
+1. **NEVER CREATE SLOP** - Do not create duplicate or "fixed" versions of existing files
+2. **NEVER** create script_fixed.sh when script.sh exists - fix the original
+3. **NEVER** create additional files when an existing file can be modified
+4. Only create NEW files when there is NO existing similar file that can be changed
+5. Always prefer editing existing files over creating new ones
+
 ### File Creation Policy
 - **DO NOT** create additional shell scripts unless explicitly requested
 - **DO NOT** create additional markdown files unless explicitly requested
@@ -430,6 +437,7 @@ make coverage
 - Run the full Testing Protocol after EVERY change
 - No commits without passing gates
 - Document failures in compliance matrix
+- Check the yml file, make sure the scripts being run there pass before commiting and pushing
 
 ## 13. Deployment Checklist
 
