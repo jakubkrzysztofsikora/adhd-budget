@@ -694,9 +694,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
     
     def _handle_oauth_discovery(self):
         """Handle OAuth 2.0 Authorization Server Metadata discovery (RFC 8414)"""
-        # Get the base URL for this server
-        host = self.headers.get('Host', 'localhost:8081')
-        base_url = f"http://{host}"
+        # Get the base URL for this server, respecting proxy headers
+        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost:8081')
+        proto = self.headers.get('X-Forwarded-Proto', 'http')
+        base_url = f"{proto}://{host}"
         
         # OAuth 2.0 Authorization Server Metadata
         # We proxy to Enable Banking with JWT auth since browser can't send custom headers
@@ -722,13 +723,15 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
     
     def _handle_protected_resource_discovery(self):
         """Handle OAuth 2.0 Protected Resource Metadata discovery"""
-        # Get the base URL for this server
-        host = self.headers.get('Host', 'localhost:8081')
-        base_url = f"http://{host}"
+        # Get the base URL for this server, respecting proxy headers
+        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost:8081')
+        proto = self.headers.get('X-Forwarded-Proto', 'http')
+        base_url = f"{proto}://{host}"
         
         # OAuth 2.0 Protected Resource Metadata
+        # The resource is the MCP endpoint specifically
         resource_data = {
-            "resource": base_url,
+            "resource": f"{base_url}/mcp",
             "authorization_server": base_url,
             "scopes_supported": ["accounts", "transactions"],
             "bearer_methods_supported": ["header"],

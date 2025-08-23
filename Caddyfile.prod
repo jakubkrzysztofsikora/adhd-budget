@@ -1,0 +1,82 @@
+# Production Caddy configuration with HTTPS
+adhdbudget.bieda.it {
+    # Automatic HTTPS with Let's Encrypt
+    tls {
+        on_demand
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Health endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # MCP Server with SSE support
+    handle /mcp* {
+        reverse_proxy mcp-server:8081 {
+            # Disable buffering for SSE
+            flush_interval -1
+            
+            # Headers for SSE
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+            
+            # Pass original protocol
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # OAuth endpoints (well-known, token, callback)
+    handle /.well-known* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+    
+    handle /oauth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+    
+    handle /auth* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # API endpoints
+    handle /api* {
+        reverse_proxy api:8082 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Default handler
+    handle {
+        respond "ADHD Budget Assistant" 200
+    }
+}
+
+# HTTP to HTTPS redirect
+http://adhdbudget.bieda.it {
+    redir https://{host}{uri} permanent
+}

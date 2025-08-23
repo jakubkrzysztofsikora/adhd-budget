@@ -146,7 +146,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile.test:/etc/caddy/Caddyfile:ro
+      - ${CADDYFILE:-./Caddyfile.test}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped

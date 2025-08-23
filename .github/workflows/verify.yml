@@ -356,7 +356,7 @@ jobs:
 
       - name: Create deployment archive
         run: |
-          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.test .env.example
+          tar -czf deploy.tar.gz docker-compose.yml Dockerfile* src/ Caddyfile.prod .env.example
           
       - name: Copy deployment archive to VPS
         uses: appleboy/scp-action@v0.1.5
@@ -382,6 +382,11 @@ jobs:
             tar -xzf deploy.tar.gz -C adhd-budget/
             cd adhd-budget
             
+            # Use production Caddyfile
+            if [ -f Caddyfile.prod ]; then
+              mv Caddyfile.prod Caddyfile
+            fi
+            
             # Create private key file if provided
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
               echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > /home/${{ secrets.VPS_USER }}/adhd-budget/enable_banking.pem
@@ -397,6 +402,7 @@ jobs:
             export ENABLE_API_URL="${{ secrets.ENABLE_API_URL }}"
             export DOMAIN="${{ secrets.DOMAIN }}"
             export ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
+            export CADDYFILE="./Caddyfile"
             
             # Stop existing containers
             docker compose down || true
