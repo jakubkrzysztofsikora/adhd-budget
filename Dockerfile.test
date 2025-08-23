@@ -42,5 +42,6 @@ ENV PYTHONPATH=/app
 
 # Test runner needs root for docker access
 # This is acceptable for test containers only
+USER root
 
 CMD ["pytest", "-v"]
