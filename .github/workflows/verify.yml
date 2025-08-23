@@ -394,7 +394,12 @@ jobs:
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
               mkdir -p /home/${{ secrets.VPS_USER }}/adhd-budget/keys
               echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem
-              chmod 600 /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem
+              # Make it readable by the container user (uid 1000)
+              chmod 644 /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem
+              # Also create a symlink with the expected name if different
+              if [ "${{ secrets.ENABLE_APP_ID }}" != "1ba6d8a6-68f8-4899-b0a4-c8d8a795337b" ]; then
+                ln -sf /home/${{ secrets.VPS_USER }}/adhd-budget/keys/${{ secrets.ENABLE_APP_ID }}.pem /home/${{ secrets.VPS_USER }}/adhd-budget/keys/1ba6d8a6-68f8-4899-b0a4-c8d8a795337b.pem
+              fi
             fi
             
             # Create .env file with all required environment variables
