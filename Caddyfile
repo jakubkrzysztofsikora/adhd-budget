@@ -37,6 +37,19 @@
             header_down X-Accel-Buffering no
         }
     }
+    
+    # SSE endpoint for MCP Inspector
+    handle /sse {
+        reverse_proxy mcp-server:8081 {
+            # Disable buffering for SSE
+            flush_interval -1
+            
+            # Headers for SSE
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+        }
+    }
 
     # OAuth endpoints (well-known, token, callback)
     handle /.well-known* {

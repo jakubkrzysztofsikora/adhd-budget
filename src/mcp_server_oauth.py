@@ -73,8 +73,9 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # OAuth authorization endpoint - proxy to Enable Banking with JWT
             self._handle_oauth_authorize_proxy()
         
-        elif self.path == "/mcp/stream":
+        elif self.path == "/mcp/stream" or self.path == "/sse":
             # SSE endpoint for streaming MCP responses
+            # Support both /mcp/stream and /sse for compatibility
             self._handle_sse_stream()
         
         elif self.path.startswith("/auth/callback"):
@@ -144,16 +145,13 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # Simple ping/pong for connection testing
             self.send_json_result({"pong": True}, request_id)
             return
-        elif method == "tools/list":
-            self._handle_tools_list(request_id)
-            return
         elif method == "tools/call":
             tool_name = params.get("name") if isinstance(params, dict) else None
             if tool_name in ["enable.banking.auth", "enable.banking.callback", "enable.banking.banks", "auth.help"]:
                 self._handle_tool_call(params, request_id)
                 return
         
-        # All other methods require Enable Banking OAuth access token
+        # All other methods require authentication (Bearer token or Enable Banking OAuth)
         if not auth_header.startswith("Bearer "):
             self.send_json_error(
                 -32600, 
@@ -170,14 +168,16 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             return
         
         # Handle authenticated request
-        if method == "tools/call":
+        if method == "tools/list":
+            self._handle_tools_list(request_id)
+        elif method == "tools/call":
             self._handle_tool_call(params, request_id, access_token)
         else:
             self.send_json_error(-32601, f"Method not found: {method}", request_id)
     
     def _validate_access_token(self, access_token: str) -> bool:
         """
-        Validate Enable Banking access token
+        Validate access token (MCP Bearer or Enable Banking OAuth)
         
         Args:
             access_token: The access token to validate
@@ -185,7 +185,12 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         Returns:
             True if token is valid
         """
-        # For now, implement basic token validation
+        # Check if it's the MCP Bearer token
+        mcp_token = os.getenv("MCP_TOKEN", "test_mcp_token_secure_2024")
+        if access_token == mcp_token:
+            return True
+        
+        # For Enable Banking tokens, implement basic validation
         # In production, this should validate against Enable Banking's token introspection
         # or maintain a server-side session tied to valid EB tokens
         
@@ -297,6 +302,14 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                     self.send_json_error(-32600, "Access token required", request_id)
                     return
                 result = self._handle_transactions_query(arguments, access_token)
+            elif tool_name == "auth.help":
+                result = self._handle_auth_help(arguments)
+            elif tool_name == "enable.banking.auth":
+                result = self._handle_enable_banking_auth(arguments)
+            elif tool_name == "enable.banking.callback":
+                result = self._handle_enable_banking_callback(arguments)
+            elif tool_name == "enable.banking.banks":
+                result = self._handle_list_banks(arguments)
             else:
                 self.send_json_error(-32601, f"Unknown tool: {tool_name}", request_id)
                 return
@@ -739,7 +752,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             return {"error": f"Failed to sync transactions: {str(e)}"}
     
     def _handle_sse_stream(self):
-        """Handle SSE streaming endpoint for MCP - proper long-lived connection"""
+        """Handle SSE streaming endpoint for MCP - bidirectional communication"""
+        # For MCP over SSE, we need to handle incoming requests via POST to /sse
+        # and stream responses back via SSE
+        
         # Set up SSE headers for long-lived streaming
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -751,25 +767,26 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         
         try:
             # Send initial connection event
-            self._send_sse_event("connected", {"status": "SSE connection established"})
+            self._send_sse_event("open", {"status": "SSE connection established"})
             
-            # Send a few initial events to demonstrate streaming
-            for i in range(3):
-                time.sleep(0.3)  # Delay between events
-                event_data = {
-                    "type": "progress",
-                    "message": f"Stream event {i+1}",
-                    "timestamp": time.time()
-                }
-                self._send_sse_event(f"event_{i+1}", event_data)
+            # Send a few progress events immediately for testing
+            self._send_sse_event("progress", {"step": 1, "message": "Initializing MCP stream"})
+            time.sleep(0.3)  # Small delay between events
+            self._send_sse_event("progress", {"step": 2, "message": "Ready for requests"})
+            time.sleep(0.3)
+            self._send_sse_event("ready", {"version": "2025-06-18", "status": "operational"})
             
-            # SSE connections should stay open for continuous streaming
-            # Send heartbeat/keepalive events periodically
+            # For proper MCP SSE, we should wait for requests
+            # But since this is GET, we can't receive requests in the same connection
+            # We need to handle this differently - MCP Inspector will POST to /mcp
+            # and we stream responses here
+            
+            # Keep connection alive with periodic heartbeats
             heartbeat_count = 0
             while True:
-                time.sleep(5)  # Send heartbeat every 5 seconds
+                time.sleep(30)  # Send heartbeat every 30 seconds
                 heartbeat_count += 1
-                self._send_sse_event("heartbeat", {"count": heartbeat_count, "timestamp": time.time()})
+                self._send_sse_event("ping", {"count": heartbeat_count})
                 
                 # Check if connection is still alive
                 if self.wfile.closed:

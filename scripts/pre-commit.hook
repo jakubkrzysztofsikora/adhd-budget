@@ -71,6 +71,15 @@ else
     fi
 fi
 
+# MCP Standards Compliance
+echo -e "\n${YELLOW}[MCP] Validating MCP compliance...${NC}"
+if ./tests/shell/validate_mcp_compliance.sh > /tmp/pre-commit-mcp.log 2>&1; then
+    echo -e "${GREEN}✓ MCP PASSED: Server compliant with official standards${NC}"
+else
+    echo -e "${RED}✗ MCP FAILED: Server not compliant! See /tmp/pre-commit-mcp.log${NC}"
+    FAILED=1
+fi
+
 # Summary
 echo "==========================================="
 if [ $FAILED -eq 0 ]; then
@@ -85,6 +94,7 @@ else
     echo "  - /tmp/pre-commit-s4.log"
     echo "  - /tmp/pre-commit-unit.log"
     echo "  - /tmp/pre-commit-integration.log"
+    echo "  - /tmp/pre-commit-mcp.log"
     echo ""
     echo "To bypass (NOT RECOMMENDED):"
     echo "  git commit --no-verify"

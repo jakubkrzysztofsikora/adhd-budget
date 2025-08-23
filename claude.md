@@ -92,7 +92,38 @@ Claude Desktop/Web Connectors consume these tools via OAuth-authenticated MCP se
 
 **Critical Rule**: No expansion until all validation gates pass for 14 consecutive days.
 
-## 4. Validation Framework
+## 4. Model Context Protocol (MCP) Standards
+
+### Official MCP Specification
+Always follow the latest MCP specification: https://modelcontextprotocol.io/specification
+
+### Core Requirements
+- **Protocol Version**: 2025-06-18
+- **Transport**: Streamable HTTP with SSE support
+- **Message Format**: JSON-RPC 2.0
+- **Required Methods**:
+  - `initialize` - Protocol version negotiation and capability exchange
+  - `initialized` - Confirmation of initialization
+  - `tools/list` - List available tools
+  - `tools/call` - Execute tool
+  - `resources/list` - List available resources (optional)
+  - `prompts/list` - List available prompts (optional)
+  - `ping` - Keep-alive mechanism
+
+### SSE Transport Requirements
+- HTTP POST for sending messages
+- HTTP GET with SSE for receiving streaming responses
+- Messages must be UTF-8 encoded JSON-RPC
+- Newline-delimited messages (no embedded newlines)
+- Support multiple simultaneous SSE streams
+- Include `MCP-Protocol-Version` header
+- Validate `Origin` header for security
+
+### Authentication
+- Bearer token authentication (current implementation)
+- OAuth 2.1 support (recommended for production)
+
+## 5. Validation Framework
 
 ### Technical Gates (T)
 
