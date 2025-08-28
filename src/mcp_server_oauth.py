@@ -853,26 +853,15 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             is_authenticated = access_token is not None
             
             if is_authenticated:
-                # For authenticated connections, send proper MCP initialization
-                # Claude expects MCP protocol messages after OAuth
-                init_message = {
+                # For authenticated connections, send a tools/list_changed notification
+                # This tells Claude that tools are available and it should fetch them
+                tools_changed_notification = {
                     "jsonrpc": "2.0",
-                    "id": "init-1",
-                    "result": {
-                        "protocolVersion": "2025-06-18",
-                        "capabilities": {
-                            "tools": {"listChanged": True},
-                            "prompts": {},
-                            "resources": {}
-                        },
-                        "serverInfo": {
-                            "name": "ADHD Budget MCP",
-                            "version": "1.0.0"
-                        }
-                    }
+                    "method": "notifications/tools/list_changed"
+                    # No params needed for this notification
                 }
-                self._send_sse_event("message", init_message)
-                logger.info("Sent MCP initialization for authenticated connection")
+                self._send_sse_event("message", tools_changed_notification)
+                logger.info("Sent tools/list_changed notification via SSE")
             else:
                 # For unauthenticated (discovery), send simple events
                 self._send_sse_event("open", {"status": "SSE connection established"})
