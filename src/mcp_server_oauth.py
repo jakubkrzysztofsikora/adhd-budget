@@ -423,7 +423,14 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # Get parameters
             aspsp_name = args.get("aspsp_name", "MOCKASPSP_SANDBOX")
             aspsp_country = args.get("aspsp_country", "FI")
-            redirect_url = args.get("redirect_url", "http://localhost:8081/auth/callback")
+            # Use production URL for redirect when available
+            base_url = os.getenv("BASE_URL", "https://adhdbudget.bieda.it")
+            if base_url == "http://localhost:8081":
+                # Local development
+                redirect_url = args.get("redirect_url", "http://localhost:8081/auth/callback")
+            else:
+                # Production - use the public URL
+                redirect_url = args.get("redirect_url", f"{base_url}/auth/callback")
             state = args.get("state", f"mcp-{int(time.time())}")
             
             # Initialize Enable Banking client with real credentials
@@ -1469,7 +1476,7 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         self.wfile.write(html_response)
     
     def _handle_oauth_callback(self):
-        """Handle OAuth callback from Enable Banking"""
+        """Handle OAuth callback from Enable Banking and redirect to Claude"""
         # Parse query parameters
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
@@ -1478,42 +1485,36 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         state = query_params.get("state", [None])[0]
         error = query_params.get("error", [None])[0]
         
+        # Check if state contains Claude's callback URL (stored during authorize)
+        # The state should contain the original Claude state
+        # We need to redirect back to Claude's callback URL
+        claude_callback = "https://claude.ai/api/mcp/auth_callback"
+        
         if error:
-            response_html = f"""
-            <html><body>
-            <h2>Authorization Failed</h2>
-            <p>Error: {error}</p>
-            <p>Please try again.</p>
-            </body></html>
-            """
+            # Redirect to Claude with error
+            redirect_url = f"{claude_callback}?error={error}&state={state or ''}"
+            self.send_response(302)
+            self.send_header("Location", redirect_url)
+            self.end_headers()
         elif code:
-            response_html = f"""
-            <html><body>
-            <h2>Authorization Successful</h2>
-            <p>Authorization code: <code>{code}</code></p>
-            <p>State: <code>{state}</code></p>
-            <p>Use the <strong>enable.banking.callback</strong> tool with this code to complete authentication.</p>
-            <script>
-            window.postMessage({{
-                type: 'oauth_callback',
-                code: '{code}',
-                state: '{state}'
-            }}, '*');
-            </script>
-            </body></html>
-            """
+            # The code from Enable Banking is the session ID
+            # Redirect to Claude with the authorization code
+            redirect_url = f"{claude_callback}?code={code}&state={state or ''}"
+            self.send_response(302)
+            self.send_header("Location", redirect_url)
+            self.end_headers()
         else:
+            # No code or error, show error page
             response_html = """
             <html><body>
             <h2>Invalid Callback</h2>
-            <p>No authorization code received.</p>
+            <p>No authorization code received from Enable Banking.</p>
             </body></html>
             """
-        
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(response_html.encode())
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(response_html.encode())
     
     def send_json_result(self, result, request_id):
         """Send JSON-RPC 2.0 success response"""
