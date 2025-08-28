@@ -11,10 +11,10 @@ import time
 from unittest.mock import patch, MagicMock, call
 
 # Check if psycopg2 is available for database tests
-PSYCOPG2_AVAILABLE = False
+HAS_PSYCOPG2 = False
 try:
     import psycopg2
-    PSYCOPG2_AVAILABLE = True
+    HAS_PSYCOPG2 = True
 except ImportError:
     # Create mock for basic imports
     class MockPsycopg2:
@@ -87,6 +87,7 @@ class TestInMemoryStateMapper(unittest.TestCase):
         self.assertIsNone(self.mapper.get_mapping("eb_3"))
 
 
+@unittest.skipUnless(HAS_PSYCOPG2, "psycopg2 not available")
 class TestDatabaseStateMapper(unittest.TestCase):
     """Test the database-backed state mapper"""
     
@@ -241,6 +242,7 @@ class TestDatabaseStateMapper(unittest.TestCase):
             self.fail(f"Should not raise exception on DB failure: {e}")
 
 
+@unittest.skipUnless(HAS_PSYCOPG2, "psycopg2 not available")
 class TestStateMapperIntegration(unittest.TestCase):
     """Integration tests for state mapper functionality"""
     
