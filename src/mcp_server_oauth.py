@@ -165,7 +165,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # MCP initialization doesn't require auth
             self._handle_initialize(params, request_id)
             return
-        elif method == "initialized":
+        elif method == "initialized" or method == "notifications/initialized":
             # MCP initialized notification (no response expected)
             # This is a notification, so it may not have an id
             if request_id is not None:
@@ -258,8 +258,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             },
             "capabilities": {
                 "tools": {
-                    "available": True
-                }
+                    "listChanged": True  # This tells Claude that tools can be listed
+                },
+                "prompts": {},
+                "resources": {}
             }
         }
         
