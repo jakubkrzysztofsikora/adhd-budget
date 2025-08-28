@@ -282,7 +282,15 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         """Handle tools/list request"""
         logger.info(f"Handling tools/list request, id={request_id}")
         result = {
-            "tools": [
+            "tools": self._get_all_tools()
+        }
+        
+        logger.info(f"Sending tools/list response with {len(result.get('tools', []))} tools")
+        self.send_json_result(result, request_id)
+    
+    def _get_all_tools(self):
+        """Get all available tools"""
+        return [
                 self._create_tool_definition(
                     "summary.today", 
                     "📊 Get today's financial summary",
@@ -317,8 +325,6 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                     }
                 )
             ]
-        }
-        self.send_json_result(result, request_id)
     
     def _handle_tool_call(self, params: Dict[str, Any], request_id, access_token: str = None):
         """Handle tools/call request"""
@@ -853,18 +859,19 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             is_authenticated = access_token is not None
             
             if is_authenticated:
-                # For authenticated connections, send a tools/list_changed notification
-                # This tells Claude that tools are available and it should fetch them
-                tools_changed_notification = {
+                # Send the tools list directly as a response
+                # Some MCP clients might expect this immediately
+                tools_response = {
                     "jsonrpc": "2.0",
-                    "method": "notifications/tools/list_changed"
-                    # No params needed for this notification
+                    "result": {
+                        "tools": self._get_all_tools()
+                    }
                 }
-                # For MCP, send raw JSON-RPC messages, not SSE events
-                message = json.dumps(tools_changed_notification) + "\n"
+                # Send as newline-delimited JSON
+                message = json.dumps(tools_response) + "\n"
                 self.wfile.write(message.encode('utf-8'))
                 self.wfile.flush()
-                logger.info("Sent tools/list_changed notification via SSE")
+                logger.info("Sent tools list directly via SSE")
             else:
                 # For unauthenticated (discovery), send simple events
                 self._send_sse_event("open", {"status": "SSE connection established"})
@@ -881,15 +888,12 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # We need to handle this differently - MCP Inspector will POST to /mcp
             # and we stream responses here
             
-            # Keep connection alive but don't send anything
-            # Claude will send requests on this connection
-            while True:
-                time.sleep(30)  # Check connection every 30 seconds
-                
-                # Check if connection is still alive
-                if self.wfile.closed:
-                    logger.info("SSE connection closed")
-                    break
+            # Keep connection alive with a simple loop
+            # SSE connections should stay open
+            logger.info("SSE connection established, keeping alive")
+            while not self.wfile.closed:
+                time.sleep(1)  # Check every second
+                # Connection will close when client disconnects
                     
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             # Client disconnected, that's normal for SSE
