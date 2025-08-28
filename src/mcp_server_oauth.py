@@ -141,9 +141,26 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # MCP initialization doesn't require auth
             self._handle_initialize(params, request_id)
             return
+        elif method == "initialized":
+            # MCP initialized notification (no response expected)
+            # This is a notification, so it may not have an id
+            if request_id is not None:
+                # If it has an id, send empty response
+                self.send_json_result({}, request_id)
+            else:
+                # For notifications without id, send nothing
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'')
+            return
         elif method == "ping":
             # Simple ping/pong for connection testing
             self.send_json_result({"pong": True}, request_id)
+            return
+        elif method == "tools/list":
+            # Allow tools/list without authentication so Claude Desktop can discover tools
+            self._handle_tools_list(request_id)
             return
         elif method == "tools/call":
             tool_name = params.get("name") if isinstance(params, dict) else None
@@ -168,9 +185,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             return
         
         # Handle authenticated request
-        if method == "tools/list":
-            self._handle_tools_list(request_id)
-        elif method == "tools/call":
+        if method == "tools/call":
             self._handle_tool_call(params, request_id, access_token)
         else:
             self.send_json_error(-32601, f"Method not found: {method}", request_id)

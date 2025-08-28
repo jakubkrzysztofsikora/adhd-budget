@@ -108,16 +108,22 @@ else
     FAILED=1
 fi
 
-# 6. Check authentication
+# 6. Check authentication (tools/list should work without auth for discovery)
 echo -e "\n${YELLOW}[6] Checking authentication...${NC}"
-UNAUTH_RESPONSE=$(curl -s -X POST "$MCP_URL/mcp" \
+# Check that tools/list works without auth (for discovery)
+UNAUTH_LIST=$(curl -s -X POST "$MCP_URL/mcp" \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}' 2>/dev/null)
 
-if echo "$UNAUTH_RESPONSE" | grep -q '"error"'; then
-    echo -e "${GREEN}✓ Authentication required${NC}"
+# Check that protected tools require auth
+UNAUTH_CALL=$(curl -s -X POST "$MCP_URL/mcp" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"summary.today","arguments":{}},"id":1}' 2>/dev/null)
+
+if echo "$UNAUTH_LIST" | grep -q '"tools"' && echo "$UNAUTH_CALL" | grep -q '"error"'; then
+    echo -e "${GREEN}✓ Authentication properly configured (discovery allowed, tools protected)${NC}"
 else
-    echo -e "${RED}✗ Authentication not enforced${NC}"
+    echo -e "${RED}✗ Authentication not properly configured${NC}"
     FAILED=1
 fi
 
