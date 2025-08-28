@@ -29,11 +29,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mcp
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - ./keys:/app/keys:ro
     environment:
       - MCP_PORT=8081
       - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=adhd_budget
+      - DB_USER=budget_user
+      - DB_PASSWORD=${DB_PASSWORD}
       - ENABLE_ENV=${ENABLE_ENV:-sandbox}
       - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
       - ENABLE_APP_ID=${ENABLE_APP_ID}
@@ -52,9 +60,6 @@ services:
     cpus: '0.25'
     cap_drop:
       - ALL
-    depends_on:
-      db:
-        condition: service_healthy
 
   worker:
     image: python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
