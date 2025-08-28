@@ -156,6 +156,8 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         
         # Log the incoming request for debugging
         logger.info(f"MCP request: method={method}, has_auth={bool(self.headers.get('Authorization'))}, id={request_id}")
+        if method not in ["initialize", "initialized", "notifications/initialized", "ping"]:
+            logger.info(f"MCP request params: {params}")
         
         # Handle authentication
         auth_header = self.headers.get("Authorization", "")
@@ -250,6 +252,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         protocol_version = params.get("protocolVersion", "0.1.0")
         
         # Send initialization response
+        # Based on MCP spec, empty tools object indicates tools are supported
         response = {
             "protocolVersion": protocol_version,
             "serverInfo": {
@@ -257,9 +260,11 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 "version": "1.0.0"
             },
             "capabilities": {
-                "tools": {}  # Empty object indicates tools are supported
+                "tools": {}
             }
         }
+        
+        logger.info(f"Sending initialize response with tools capability")
         
         self.send_json_result(response, request_id)
     
