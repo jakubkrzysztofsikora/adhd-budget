@@ -110,7 +110,8 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
     
     def do_POST(self):
         """Handle POST requests for JSON-RPC and OAuth token exchange"""
-        if self.path == "/mcp":
+        if self.path == "/mcp" or self.path == "/mcp/stream":
+            # Both /mcp and /mcp/stream handle MCP JSON-RPC requests
             self._handle_mcp_request()
         elif self.path.startswith("/oauth/authorize"):
             self._handle_oauth_authorize_submit()
