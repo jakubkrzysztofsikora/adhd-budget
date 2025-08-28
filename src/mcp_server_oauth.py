@@ -15,6 +15,26 @@ from urllib.parse import urlparse, parse_qs
 from enable_banking import EnableBankingClient
 from enable_banking_jwt import EnableBankingJWT
 
+# Try to import database state mapper
+try:
+    from db_state_mapping import StateMapper
+    state_mapper = StateMapper()
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.info("Database state mapper initialized")
+except Exception as e:
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.warning(f"Failed to initialize database state mapper, using in-memory: {e}")
+    # Fallback to in-memory dictionary
+    class StateMapper:
+        def __init__(self):
+            self.mapping = {}
+        def set_mapping(self, eb_state: str, claude_state: str):
+            self.mapping[eb_state] = claude_state
+        def get_mapping(self, eb_state: str) -> Optional[str]:
+            return self.mapping.pop(eb_state, None)
+        def cleanup_expired(self):
+            pass
+    state_mapper = StateMapper()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,10 +51,6 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         'http://localhost:6274',  # MCP Inspector
         'http://localhost:6277'   # MCP Inspector
     }
-    
-    # State mapping to preserve Claude's state through Enable Banking flow
-    # Maps Enable Banking state -> Claude's original state
-    STATE_MAPPING = {}
     
     def __init__(self, *args, **kwargs):
         """Initialize handler with Enable Banking client"""
@@ -526,7 +542,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             
             # Generate our own state for Enable Banking and map it to Claude's state
             eb_state = f"eb_{int(time.time())}_{os.urandom(8).hex()}"
-            EnableBankingMCPHandler.STATE_MAPPING[eb_state] = claude_state
+            state_mapper.set_mapping(eb_state, claude_state)
             logger.info(f"State mapping: EB state {eb_state} -> Claude state {claude_state}")
             
             # Use the existing Enable Banking auth logic with our state
@@ -1495,12 +1511,13 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         error = query_params.get("error", [None])[0]
         
         # Look up Claude's original state from our mapping
-        claude_state = EnableBankingMCPHandler.STATE_MAPPING.get(eb_state, eb_state)
-        logger.info(f"OAuth callback: EB state {eb_state} -> Claude state {claude_state}")
-        
-        # Clean up the state mapping
-        if eb_state in EnableBankingMCPHandler.STATE_MAPPING:
-            del EnableBankingMCPHandler.STATE_MAPPING[eb_state]
+        claude_state = state_mapper.get_mapping(eb_state)
+        if not claude_state:
+            # If no mapping found, use the Enable Banking state as fallback
+            logger.warning(f"No state mapping found for {eb_state}, using as-is")
+            claude_state = eb_state
+        else:
+            logger.info(f"OAuth callback: EB state {eb_state} -> Claude state {claude_state}")
         
         # Redirect back to Claude's callback URL
         claude_callback = "https://claude.ai/api/mcp/auth_callback"

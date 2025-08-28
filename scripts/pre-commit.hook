@@ -39,12 +39,25 @@ fi
 
 # Unit tests (T3: Intelligence accuracy)
 echo -e "\n${YELLOW}[T3] Running unit tests...${NC}"
-if python3 -m pytest tests/unit/ -q --tb=no > /tmp/pre-commit-unit.log 2>&1; then
-    UNIT_COUNT=$(grep -o "passed" /tmp/pre-commit-unit.log | wc -l | xargs)
-    echo -e "${GREEN}✓ T3 PASSED: ${UNIT_COUNT} unit tests passed${NC}"
+# Check if Docker is running for unit tests
+if ! docker info > /dev/null 2>&1; then
+    # Run locally if Docker not available
+    if python3 -m pytest tests/unit/ -q --tb=no > /tmp/pre-commit-unit.log 2>&1; then
+        UNIT_COUNT=$(grep -o "passed" /tmp/pre-commit-unit.log | wc -l | xargs)
+        echo -e "${GREEN}✓ T3 PASSED: ${UNIT_COUNT} unit tests passed${NC}"
+    else
+        echo -e "${RED}✗ T3 FAILED: Unit tests failed! See /tmp/pre-commit-unit.log${NC}"
+        FAILED=1
+    fi
 else
-    echo -e "${RED}✗ T3 FAILED: Unit tests failed! See /tmp/pre-commit-unit.log${NC}"
-    FAILED=1
+    # Run unit tests in Docker container with all dependencies
+    if DB_PASSWORD=testdupa123! docker compose run --rm test-runner pytest tests/unit/ -q --tb=no > /tmp/pre-commit-unit.log 2>&1; then
+        UNIT_COUNT=$(grep -o "passed" /tmp/pre-commit-unit.log | wc -l | xargs)
+        echo -e "${GREEN}✓ T3 PASSED: ${UNIT_COUNT} unit tests passed${NC}"
+    else
+        echo -e "${RED}✗ T3 FAILED: Unit tests failed! See /tmp/pre-commit-unit.log${NC}"
+        FAILED=1
+    fi
 fi
 
 # Integration tests in Docker (T1, T4, OAuth)
