@@ -37,50 +37,41 @@ jobs:
           chmod +x tests/shell/scan_git_secrets.sh
           tests/shell/scan_git_secrets.sh
 
-  # T3 Gate: Unit Tests
+  # T3 Gate: Unit Tests (Run in Docker)
   unit-tests:
     name: T3 - Intelligence Accuracy
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11']
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Install dependencies
+      - name: Run unit tests in Docker
+        env:
+          DB_PASSWORD: testdupa123!
         run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-cov pytest-timeout pytest-asyncio aiohttp pyjwt cryptography freezegun
-
-      - name: Run unit tests
-        run: |
-          pytest tests/unit/ -v --tb=short --timeout=30 \
-            --junitxml=reports/unit-results-py${{ matrix.python-version }}.xml \
-            --cov=src --cov-report=xml:coverage/coverage-py${{ matrix.python-version }}.xml
+          docker compose run --rm test-runner pytest tests/unit/ -v --tb=short --timeout=30 \
+            --junitxml=reports/unit-results.xml \
+            --cov=src --cov-report=xml:coverage/coverage.xml
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-results-py${{ matrix.python-version }}
+          name: unit-test-results
           path: |
-            reports/unit-results-*.xml
-            coverage/coverage-*.xml
+            reports/unit-results*.xml
+            coverage/coverage*.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
-          file: ./coverage/coverage-py${{ matrix.python-version }}.xml
+          file: ./coverage/coverage.xml
           flags: unittests
-          name: codecov-py${{ matrix.python-version }}
+          name: codecov-docker
 
   # S4 Gate: Container Security
   container-security:
