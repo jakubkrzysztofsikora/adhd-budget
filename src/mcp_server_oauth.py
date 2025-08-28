@@ -32,6 +32,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         'http://localhost:6277'   # MCP Inspector
     }
     
+    # State mapping to preserve Claude's state through Enable Banking flow
+    # Maps Enable Banking state -> Claude's original state
+    STATE_MAPPING = {}
+    
     def __init__(self, *args, **kwargs):
         """Initialize handler with Enable Banking client"""
         super().__init__(*args, **kwargs)
@@ -518,14 +522,19 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             aspsp_name = request_data.get("aspsp_name", "MOCKASPSP_SANDBOX")
             aspsp_country = request_data.get("aspsp_country", "FI")
             redirect_url = request_data.get("redirect_url", "http://localhost:6274/callback")
-            state = request_data.get("state", f"api-{int(time.time())}")
+            claude_state = request_data.get("state", f"api-{int(time.time())}")
             
-            # Use the existing Enable Banking auth logic
+            # Generate our own state for Enable Banking and map it to Claude's state
+            eb_state = f"eb_{int(time.time())}_{os.urandom(8).hex()}"
+            EnableBankingMCPHandler.STATE_MAPPING[eb_state] = claude_state
+            logger.info(f"State mapping: EB state {eb_state} -> Claude state {claude_state}")
+            
+            # Use the existing Enable Banking auth logic with our state
             result = self._handle_enable_banking_auth({
                 "aspsp_name": aspsp_name,
                 "aspsp_country": aspsp_country,
                 "redirect_url": redirect_url,
-                "state": state
+                "state": eb_state  # Use Enable Banking state
             })
             
             # Send JSON response
@@ -1482,24 +1491,30 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         query_params = parse_qs(parsed_url.query)
         
         code = query_params.get("code", [None])[0]
-        state = query_params.get("state", [None])[0]
+        eb_state = query_params.get("state", [None])[0]
         error = query_params.get("error", [None])[0]
         
-        # Check if state contains Claude's callback URL (stored during authorize)
-        # The state should contain the original Claude state
-        # We need to redirect back to Claude's callback URL
+        # Look up Claude's original state from our mapping
+        claude_state = EnableBankingMCPHandler.STATE_MAPPING.get(eb_state, eb_state)
+        logger.info(f"OAuth callback: EB state {eb_state} -> Claude state {claude_state}")
+        
+        # Clean up the state mapping
+        if eb_state in EnableBankingMCPHandler.STATE_MAPPING:
+            del EnableBankingMCPHandler.STATE_MAPPING[eb_state]
+        
+        # Redirect back to Claude's callback URL
         claude_callback = "https://claude.ai/api/mcp/auth_callback"
         
         if error:
-            # Redirect to Claude with error
-            redirect_url = f"{claude_callback}?error={error}&state={state or ''}"
+            # Redirect to Claude with error and Claude's original state
+            redirect_url = f"{claude_callback}?error={error}&state={claude_state or ''}"
             self.send_response(302)
             self.send_header("Location", redirect_url)
             self.end_headers()
         elif code:
             # The code from Enable Banking is the session ID
-            # Redirect to Claude with the authorization code
-            redirect_url = f"{claude_callback}?code={code}&state={state or ''}"
+            # Redirect to Claude with the authorization code and Claude's original state
+            redirect_url = f"{claude_callback}?code={code}&state={claude_state or ''}"
             self.send_response(302)
             self.send_header("Location", redirect_url)
             self.end_headers()
