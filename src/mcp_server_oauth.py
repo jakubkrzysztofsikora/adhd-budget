@@ -860,7 +860,10 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                     "method": "notifications/tools/list_changed"
                     # No params needed for this notification
                 }
-                self._send_sse_event("message", tools_changed_notification)
+                # For MCP, send raw JSON-RPC messages, not SSE events
+                message = json.dumps(tools_changed_notification) + "\n"
+                self.wfile.write(message.encode('utf-8'))
+                self.wfile.flush()
                 logger.info("Sent tools/list_changed notification via SSE")
             else:
                 # For unauthenticated (discovery), send simple events
@@ -878,15 +881,14 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # We need to handle this differently - MCP Inspector will POST to /mcp
             # and we stream responses here
             
-            # Keep connection alive with periodic heartbeats
-            heartbeat_count = 0
+            # Keep connection alive but don't send anything
+            # Claude will send requests on this connection
             while True:
-                time.sleep(30)  # Send heartbeat every 30 seconds
-                heartbeat_count += 1
-                self._send_sse_event("ping", {"count": heartbeat_count})
+                time.sleep(30)  # Check connection every 30 seconds
                 
                 # Check if connection is still alive
                 if self.wfile.closed:
+                    logger.info("SSE connection closed")
                     break
                     
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
