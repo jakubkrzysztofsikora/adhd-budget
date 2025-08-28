@@ -154,6 +154,9 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         params = request.get("params", {})
         request_id = request.get("id")
         
+        # Log the incoming request for debugging
+        logger.info(f"MCP request: method={method}, has_auth={bool(self.headers.get('Authorization'))}, id={request_id}")
+        
         # Handle authentication
         auth_header = self.headers.get("Authorization", "")
         
@@ -274,6 +277,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
     
     def _handle_tools_list(self, request_id):
         """Handle tools/list request"""
+        logger.info(f"Handling tools/list request, id={request_id}")
         result = {
             "tools": [
                 self._create_tool_definition(
@@ -1615,6 +1619,10 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
             "result": result,
             "id": request_id
         }
+        
+        # Log what we're sending
+        if isinstance(result, dict) and "tools" in result:
+            logger.info(f"Sending tools/list response with {len(result.get('tools', []))} tools")
         
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
