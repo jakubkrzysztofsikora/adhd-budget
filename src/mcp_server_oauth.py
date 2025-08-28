@@ -537,19 +537,27 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
             # Get parameters from request
             aspsp_name = request_data.get("aspsp_name", "MOCKASPSP_SANDBOX")
             aspsp_country = request_data.get("aspsp_country", "FI")
-            redirect_url = request_data.get("redirect_url", "http://localhost:6274/callback")
+            claude_redirect_url = request_data.get("redirect_url", "http://localhost:6274/callback")
             claude_state = request_data.get("state", f"api-{int(time.time())}")
             
-            # Generate our own state for Enable Banking and map it to Claude's state
+            # Store Claude's redirect URL in the state mapping for later use
+            # Generate our own state for Enable Banking and map it to Claude's state AND redirect URL
             eb_state = f"eb_{int(time.time())}_{os.urandom(8).hex()}"
             state_mapper.set_mapping(eb_state, claude_state)
-            logger.info(f"State mapping: EB state {eb_state} -> Claude state {claude_state}")
+            # Also store the Claude redirect URL so we know where to send them back
+            state_mapper.set_mapping(f"{eb_state}_redirect", claude_redirect_url)
+            logger.info(f"State mapping: EB state {eb_state} -> Claude state {claude_state}, redirect {claude_redirect_url}")
             
-            # Use the existing Enable Banking auth logic with our state
+            # CRITICAL: Always use OUR callback URL with Enable Banking, not Claude's
+            # We will handle the redirect to Claude in our callback handler
+            base_url = os.getenv("BASE_URL", "https://adhdbudget.bieda.it")
+            our_callback_url = f"{base_url}/auth/callback"
+            
+            # Use the existing Enable Banking auth logic with OUR callback URL
             result = self._handle_enable_banking_auth({
                 "aspsp_name": aspsp_name,
                 "aspsp_country": aspsp_country,
-                "redirect_url": redirect_url,
+                "redirect_url": our_callback_url,  # Use OUR callback, not Claude's!
                 "state": eb_state  # Use Enable Banking state
             })
             
@@ -1502,6 +1510,8 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
     
     def _handle_oauth_callback(self):
         """Handle OAuth callback from Enable Banking and redirect to Claude"""
+        logger.info(f"OAuth callback received: {self.path}")
+        
         # Parse query parameters
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
@@ -1512,6 +1522,9 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         
         # Look up Claude's original state from our mapping
         claude_state = state_mapper.get_mapping(eb_state)
+        # Also get the redirect URL we stored
+        claude_redirect_url = state_mapper.get_mapping(f"{eb_state}_redirect")
+        
         if not claude_state:
             # If no mapping found, use the Enable Banking state as fallback
             logger.warning(f"No state mapping found for {eb_state}, using as-is")
@@ -1519,8 +1532,9 @@ ENABLE_API_BASE_URL=https://api.enablebanking.com
         else:
             logger.info(f"OAuth callback: EB state {eb_state} -> Claude state {claude_state}")
         
-        # Redirect back to Claude's callback URL
-        claude_callback = "https://claude.ai/api/mcp/auth_callback"
+        # Use the stored redirect URL, or default to Claude's standard callback
+        claude_callback = claude_redirect_url or "https://claude.ai/api/mcp/auth_callback"
+        logger.info(f"Redirecting to: {claude_callback} with state: {claude_state}")
         
         if error:
             # Redirect to Claude with error and Claude's original state
