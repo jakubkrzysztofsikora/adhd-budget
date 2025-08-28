@@ -811,6 +811,26 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         # For MCP over SSE, we need to handle incoming requests via POST to /sse
         # and stream responses back via SSE
         
+        # Check for Bearer token authentication after OAuth flow
+        auth_header = self.headers.get("Authorization", "")
+        access_token = None
+        if auth_header.startswith("Bearer "):
+            access_token = auth_header[7:]  # Extract token after "Bearer "
+            # For Enable Banking, the access token is the session ID
+            # We accept any non-empty token as valid for now
+            if access_token:
+                logger.info(f"SSE connection authenticated with token: {access_token[:20]}...")
+            else:
+                logger.warning("SSE connection attempted with empty Bearer token")
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Unauthorized: Invalid access token")
+                return
+        else:
+            # No authentication provided - this is okay for initial discovery
+            logger.info("SSE connection without authentication (discovery mode)")
+        
         # Set up SSE headers for long-lived streaming
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -821,15 +841,40 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
         try:
-            # Send initial connection event
-            self._send_sse_event("open", {"status": "SSE connection established"})
+            # Check if we have authentication (post-OAuth)
+            is_authenticated = access_token is not None
             
-            # Send a few progress events immediately for testing
-            self._send_sse_event("progress", {"step": 1, "message": "Initializing MCP stream"})
-            time.sleep(0.3)  # Small delay between events
-            self._send_sse_event("progress", {"step": 2, "message": "Ready for requests"})
-            time.sleep(0.3)
-            self._send_sse_event("ready", {"version": "2025-06-18", "status": "operational"})
+            if is_authenticated:
+                # For authenticated connections, send proper MCP initialization
+                # Claude expects MCP protocol messages after OAuth
+                init_message = {
+                    "jsonrpc": "2.0",
+                    "id": "init-1",
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {
+                            "tools": {"listChanged": True},
+                            "prompts": {},
+                            "resources": {}
+                        },
+                        "serverInfo": {
+                            "name": "ADHD Budget MCP",
+                            "version": "1.0.0"
+                        }
+                    }
+                }
+                self._send_sse_event("message", init_message)
+                logger.info("Sent MCP initialization for authenticated connection")
+            else:
+                # For unauthenticated (discovery), send simple events
+                self._send_sse_event("open", {"status": "SSE connection established"})
+                
+                # Send a few progress events immediately for testing
+                self._send_sse_event("progress", {"step": 1, "message": "Initializing MCP stream"})
+                time.sleep(0.3)  # Small delay between events
+                self._send_sse_event("progress", {"step": 2, "message": "Ready for requests"})
+                time.sleep(0.3)
+                self._send_sse_event("ready", {"version": "2025-06-18", "status": "operational"})
             
             # For proper MCP SSE, we should wait for requests
             # But since this is GET, we can't receive requests in the same connection
