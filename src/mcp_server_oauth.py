@@ -257,11 +257,7 @@ class EnableBankingMCPHandler(BaseHTTPRequestHandler):
                 "version": "1.0.0"
             },
             "capabilities": {
-                "tools": {
-                    "listChanged": True  # This tells Claude that tools can be listed
-                },
-                "prompts": {},
-                "resources": {}
+                "tools": {}  # Empty object indicates tools are supported
             }
         }
         
