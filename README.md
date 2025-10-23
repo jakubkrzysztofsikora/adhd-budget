@@ -59,6 +59,11 @@ python src/mcp_remote_server.py
 # Server listens on http://127.0.0.1:8000/mcp
 ```
 
+Set ``MCP_PORT`` and ``MCP_HOST`` to override the bind address. For example,
+Docker Compose sets ``MCP_PORT=8081`` and ``MCP_HOST=0.0.0.0`` so that other
+containers and the reverse proxy can reach the service while local execution
+continues to default to ``127.0.0.1`` for safety.
+
 ### Test the handshake
 
 ```bash
