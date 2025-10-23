@@ -22,8 +22,12 @@ PROTOCOL_VERSION = "2025-06-18"
 class TestEnableBankingOAuthComplete:
     """Complete E2E test for Enable Banking OAuth + MCP flow"""
 
-    BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost")
-    MCP_URL = f"{BASE_URL}/mcp"
+    def _base_url(self) -> str:
+        return os.getenv("TEST_BASE_URL", "http://localhost")
+
+    def _mcp_url(self) -> str:
+        base = self._base_url().rstrip("/")
+        return f"{base}/mcp"
 
     @pytest.fixture(scope="module")
     def session_state(self) -> Dict[str, Optional[str]]:
@@ -52,12 +56,13 @@ class TestEnableBankingOAuthComplete:
 
     def test_01_oauth_discovery(self):
         """Test that OAuth discovery endpoint is available"""
-        response = requests.get(f"{self.BASE_URL}/.well-known/oauth-authorization-server", timeout=5)
+        base_url = self._base_url()
+        response = requests.get(f"{base_url}/.well-known/oauth-authorization-server", timeout=5)
         assert response.status_code == 200
         metadata = response.json()
 
-        assert metadata["authorization_endpoint"] == f"{self.BASE_URL}/oauth/authorize"
-        assert metadata["token_endpoint"] == f"{self.BASE_URL}/oauth/token"
+        assert metadata["authorization_endpoint"] == f"{base_url}/oauth/authorize"
+        assert metadata["token_endpoint"] == f"{base_url}/oauth/token"
         assert "authorization_code" in metadata.get("grant_types_supported", [])
         assert PROTOCOL_VERSION.startswith("2025")
 
@@ -70,8 +75,9 @@ class TestEnableBankingOAuthComplete:
             "grant_types": ["authorization_code", "refresh_token"],
         }
 
+        base_url = self._base_url()
         response = requests.post(
-            f"{self.BASE_URL}/oauth/register",
+            f"{base_url}/oauth/register",
             json=registration_data,
             headers={"Content-Type": "application/json"},
             timeout=5,
@@ -93,8 +99,9 @@ class TestEnableBankingOAuthComplete:
             "scope": "accounts transactions summary",
         }
 
+        base_url = self._base_url()
         response = requests.get(
-            f"{self.BASE_URL}/oauth/authorize",
+            f"{base_url}/oauth/authorize",
             params=params,
             allow_redirects=False,
             timeout=5,
@@ -119,8 +126,9 @@ class TestEnableBankingOAuthComplete:
             "client_secret": session_state["client_secret"],
         }
 
+        base_url = self._base_url()
         response = requests.post(
-            f"{self.BASE_URL}/oauth/token",
+            f"{base_url}/oauth/token",
             json=token_data,
             headers={"Content-Type": "application/json"},
             timeout=5,
@@ -151,8 +159,10 @@ class TestEnableBankingOAuthComplete:
             "id": 1,
         }
 
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(self.MCP_URL, json=init_request, headers=headers) as response:
+            async with session.post(mcp_url, json=init_request, headers=headers) as response:
                 assert response.status == 200
                 session_state["session_id"] = response.headers.get("Mcp-Session-Id")
                 payload = await response.json()
@@ -165,8 +175,10 @@ class TestEnableBankingOAuthComplete:
 
         list_request = {"jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 2}
 
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(self.MCP_URL, json=list_request, headers=headers) as response:
+            async with session.post(mcp_url, json=list_request, headers=headers) as response:
                 assert response.status == 200
                 result = await response.json()
                 tools = result.get("result", {}).get("tools", [])
@@ -185,8 +197,10 @@ class TestEnableBankingOAuthComplete:
             "id": 3,
         }
 
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(self.MCP_URL, json=tool_request, headers=headers) as response:
+            async with session.post(mcp_url, json=tool_request, headers=headers) as response:
                 assert response.status == 200
                 result = await response.json()
                 assert "result" in result or "error" in result
@@ -201,8 +215,10 @@ class TestEnableBankingOAuthComplete:
             "MCP-Protocol-Version": PROTOCOL_VERSION,
         }
 
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.get(self.MCP_URL, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+            async with session.get(mcp_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
                 assert response.status == 200
                 assert "text/event-stream" in response.headers.get("Content-Type", "")
                 line = await response.content.readline()
@@ -210,21 +226,24 @@ class TestEnableBankingOAuthComplete:
 
     def test_09_complete_flow_integration(self, session_state):
         """Test the complete flow from start to finish"""
-        health_response = requests.get(f"{self.BASE_URL}/health", timeout=5)
+        base_url = self._base_url()
+        health_response = requests.get(f"{base_url}/health", timeout=5)
         assert health_response.status_code == 200
 
         protected_resource = requests.get(
-            f"{self.BASE_URL}/.well-known/oauth-protected-resource",
+            f"{base_url}/.well-known/oauth-protected-resource",
             timeout=5,
         )
         assert protected_resource.status_code == 200
         metadata = protected_resource.json().get("protectedResourceMetadata", {})
-        assert metadata.get("resource") == f"{self.BASE_URL}/mcp"
+        assert metadata.get("resource") == f"{base_url}/mcp"
 
         # Verify the session can still call tools
         headers = self._build_mcp_headers(session_state)
+        mcp_url = self._mcp_url()
+
         response = requests.post(
-            self.MCP_URL,
+            mcp_url,
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/call",

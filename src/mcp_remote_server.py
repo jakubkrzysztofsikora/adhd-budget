@@ -542,6 +542,7 @@ class MCPApplication:
             requested_version, params.get("clientInfo", {})
         )
 
+        resource_url = f"{request.scheme}://{request.host}/mcp"
         result = {
             "protocolVersion": requested_version,
             "capabilities": {
@@ -551,7 +552,7 @@ class MCPApplication:
             },
             "serverInfo": {"name": "adhd-budget-mcp", "version": "2.0.0"},
             "protectedResourceMetadata": {
-                "resource": "https://adhdbudget.bieda.it/mcp",
+                "resource": resource_url,
                 "authorization_servers": [self.oauth.issuer],
             },
         }

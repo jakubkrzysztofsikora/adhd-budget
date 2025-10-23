@@ -6,6 +6,7 @@ Real streaming test - no mocks
 import asyncio
 import json
 import os
+import socket
 import time
 import uuid
 from typing import Dict
@@ -24,7 +25,18 @@ class TestT4MCPStreaming:
     @pytest.fixture(scope="class")
     def proxy_url(self) -> str:
         """Proxy URL (Caddy)."""
-        return os.getenv("PROXY_URL", "http://reverse-proxy")
+        configured = os.getenv("PROXY_URL", "http://reverse-proxy")
+        parsed = urlparse(configured)
+        hostname = parsed.hostname
+
+        if hostname:
+            try:
+                socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+            except socket.gaierror:
+                fallback = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8000"
+                return fallback.rstrip("/")
+
+        return configured.rstrip("/")
 
     @pytest.fixture(scope="class")
     def oauth_client(self, proxy_url: str) -> Dict[str, str]:
