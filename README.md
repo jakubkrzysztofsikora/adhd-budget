@@ -41,10 +41,57 @@ docker compose ps
 
 - **Main App:** http://localhost
 - **API:** http://localhost:8082
-- **MCP Server:** http://localhost/mcp (via reverse proxy)
+- **MCP Server:** http://localhost:8000/mcp (streamable HTTP)
 - **OAuth Flow:** http://localhost/oauth/authorize
 - **MCP Inspector:** http://localhost:6274 (development)
 - **Health Check:** http://localhost/health
+
+## MCP Remote Server
+
+The MCP server implements the 2025-06-18 protocol with streamable HTTP
+transport. It validates the ``MCP-Protocol-Version`` header, enforces
+origin allow lists and requires OAuth 2.1 bearer tokens for protected tools.
+
+### Run locally
+
+```bash
+python src/mcp_remote_server.py
+# Server listens on http://127.0.0.1:8000/mcp
+```
+
+### Test the handshake
+
+```bash
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-06-18" \
+  -d '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"0.1.0"}}}'
+```
+
+Use the ``Mcp-Session-Id`` response header for subsequent POST requests and
+the SSE stream:
+
+```bash
+curl -N http://127.0.0.1:8000/mcp \
+  -H "Accept: text/event-stream" \
+  -H "Mcp-Session-Id: <session-id>" \
+  -H "MCP-Protocol-Version: 2025-06-18"
+```
+
+### OAuth endpoints
+
+The server exposes OAuth 2.1 discovery and token endpoints required for
+remote deployments:
+
+- ``/.well-known/oauth-authorization-server`` – metadata
+- ``/.well-known/oauth-protected-resource`` – RFC 8707 resource indicators
+- ``/oauth/register`` – Dynamic Client Registration (POST JSON)
+- ``/oauth/authorize`` – Issues authorization codes and redirects
+- ``/oauth/token`` – Exchanges authorization codes or refresh tokens
+- ``/oauth/revoke`` – Revokes access or refresh tokens
+
+Always register ``https://www.claude.ai/api/auth/callback`` as a redirect URI
+when deploying for Claude Web/Desktop.
 
 ## Deployment Pipeline
 
@@ -120,10 +167,11 @@ python -m pytest tests/integration/ -v
 # 1. Run E2E tests against production
 python3 tests/e2e/test_deployed_instance.py
 
-# 2. Test with MCP Inspector
+# 2. Test with MCP Inspector or Claude Desktop
 ./setup_mcp_inspector.sh
-# Opens at http://localhost:6274
-# Follow tests/e2e/test_mcp_inspector.md
+# Configure Inspector or Claude Desktop with the streamable HTTP transport:
+#   http://127.0.0.1:8000/mcp
+# Add the OAuth client via /oauth/register and complete the authorization code flow.
 
 # 3. Verify authenticated endpoints
 curl -H "Authorization: Bearer YOUR_API_TOKEN" https://adhdbudget.bieda.it/api/health
@@ -198,8 +246,8 @@ Configure WhatsApp Business Cloud API:
 
 ### HTTPS URLs in OAuth Discovery
 **Issue**: OAuth discovery returns HTTP URLs instead of HTTPS on production
-**Cause**: Nginx proxy on VPS doesn't pass `X-Forwarded-Proto` header
-**Workaround**: MCP server forces HTTPS for `adhdbudget.bieda.it` domain (see `src/mcp_server_oauth.py` lines 701-706)
+**Cause**: Reverse proxy not forwarding `X-Forwarded-Proto` header
+**Workaround**: Configure the proxy to forward scheme information so `src/mcp_remote_server.py` can emit HTTPS URLs
 **Fix**: Update nginx configuration on VPS to include:
 ```nginx
 proxy_set_header X-Forwarded-Proto https;

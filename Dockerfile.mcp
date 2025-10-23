@@ -4,7 +4,7 @@ FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b06
 RUN apk add --no-cache postgresql-dev gcc musl-dev wget
 
 # Install Python dependencies as root
-RUN pip install --no-cache-dir requests cryptography PyJWT psycopg2
+RUN pip install --no-cache-dir aiohttp requests cryptography PyJWT psycopg2
 
 # Create non-root user
 RUN adduser -D -u 1000 mcpuser
@@ -21,4 +21,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8081/health || exit 1
 
 # Start the server
-CMD ["python", "/app/mcp_server_oauth.py"]
+CMD ["python", "/app/mcp_remote_server.py"]
