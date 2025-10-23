@@ -309,6 +309,10 @@ class MCPApplication:
         self.oauth = OAuthProvider()
         self.app = web.Application(middlewares=[cors_and_origin_middleware])
         self.app.router.add_route("GET", "/mcp", self.handle_get)
+        # Backwards compatibility with earlier test harnesses that used
+        # dedicated streaming endpoints.
+        self.app.router.add_route("GET", "/mcp/stream", self.handle_get)
+        self.app.router.add_route("GET", "/mcp/sse", self.handle_get)
         self.app.router.add_route("POST", "/mcp", self.handle_post)
         self.app.router.add_route("OPTIONS", "/mcp", self.handle_options)
         self._register_oauth_routes()
@@ -336,7 +340,7 @@ class MCPApplication:
         return web.Response(status=200)
 
     async def handle_get(self, request: web.Request) -> web.StreamResponse:
-        session_id = request.headers.get("Mcp-Session-Id")
+        session_id = request.headers.get("Mcp-Session-Id") or request.query.get("sessionId")
         session = await self.sessions.get(session_id)
         if not session:
             return web.json_response(
@@ -348,21 +352,36 @@ class MCPApplication:
                 status=400,
             )
 
-        response = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
         await response.prepare(request)
 
-        await response.write(b": connected\n\n")
+        await self._write_sse_event(
+            response,
+            "connected",
+            {"session": session.id, "timestamp": time.time()},
+        )
+        await self._write_sse_event(
+            response,
+            "heartbeat",
+            {"timestamp": time.time()},
+        )
 
         try:
             while True:
                 try:
-                    message = await asyncio.wait_for(session.queue.get(), timeout=20)
+                    message = await asyncio.wait_for(session.queue.get(), timeout=10)
                 except asyncio.TimeoutError:
-                    await response.write(b": heartbeat\n\n")
+                    await self._write_sse_event(response, "heartbeat", {"timestamp": time.time()})
                     continue
 
-                payload = _json_dumps(message)
-                await response.write(b"data: " + payload + b"\n\n")
+                await self._write_sse_event(response, message.get("event", "message"), message)
         except asyncio.CancelledError:
             raise
         except ConnectionResetError:
@@ -371,6 +390,11 @@ class MCPApplication:
             await response.write_eof()
 
         return response
+
+    async def _write_sse_event(self, response: web.StreamResponse, event: str, data: Dict[str, Any]) -> None:
+        payload = _json_dumps(data)
+        await response.write(f"event: {event}\n".encode("utf-8"))
+        await response.write(b"data: " + payload + b"\n\n")
 
     async def handle_post(self, request: web.Request) -> web.StreamResponse:
         self._validate_headers(request)
@@ -583,6 +607,7 @@ class MCPApplication:
             await self.sessions.publish(
                 session.id,
                 {
+                    "event": "progress",
                     "type": "progress",
                     "message": "Fetching transactions",
                     "timestamp": time.time(),
@@ -595,6 +620,7 @@ class MCPApplication:
             await self.sessions.publish(
                 session.id,
                 {
+                    "event": "progress",
                     "type": "progress",
                     "message": "Normalising results",
                     "timestamp": time.time(),
