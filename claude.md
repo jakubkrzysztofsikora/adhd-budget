@@ -57,13 +57,20 @@ Claude Desktop/Web Connectors consume these tools via OAuth-authenticated MCP se
 - `summary.today` - Current day's financial summary
 - `projection.month` - Monthly spending projections
 - `transactions.query` - Query transactions with date filtering
+- `search` - Free-text search over recent transactions (required by ChatGPT Developer Mode)
+- `fetch` - Retrieve a specific transaction payload
 - `accounts.list` - List connected bank accounts
 - `spending.categorize` - ML-powered transaction categorization
 - `budget.status` - Budget vs actual comparison
 - `outliers.detect` - Find unusual transactions
 - `savings.forecast` - Project savings potential
 
-**Authentication**: Enable Banking OAuth 2.0 flow with JWT (RS256) for API calls
+**Authentication**: OAuth 2.1 flow (authorization code + refresh token) with JWT-backed Enable Banking API access
+
+### Connector configuration
+- **Claude Desktop/Web (remote)**: Point Claude to your HTTPS deployment (for example `https://mcp.example.com`). Claude fetches `/.well-known/mcp.json` (respecting forwarded headers), registers a client with the appropriate redirect variant, and walks through OAuth automatically with a direct 302 back to Claude.
+- **Claude Desktop (local relay)**: During development you can still rely on `npx mcp-remote http://127.0.0.1:8000/mcp` to expose the streamable HTTP endpoint locally.
+- **ChatGPT Developer Mode**: Settings → Connectors → Advanced → Developer Mode → Add your HTTPS endpoint (or `http://127.0.0.1:8000/mcp` for local testing). The MCP server recognises the full set of ChatGPT redirects (see `DEFAULT_REMOTE_REDIRECT_URIS`) and sends a direct 302 back to the requested callback, eliminating the "invalid redirect" error.
 
 ## 3. Iterative Roadmap
 
@@ -111,6 +118,7 @@ Always follow the latest MCP specification: https://modelcontextprotocol.io/spec
   - `ping` - Keep-alive mechanism
 
 ### SSE Transport Requirements
+- Single `/mcp` endpoint handles POST (JSON-RPC) and GET (SSE stream)
 - HTTP POST for sending messages
 - HTTP GET with SSE for receiving streaming responses
 - Messages must be UTF-8 encoded JSON-RPC
@@ -118,6 +126,7 @@ Always follow the latest MCP specification: https://modelcontextprotocol.io/spec
 - Support multiple simultaneous SSE streams
 - Include `MCP-Protocol-Version` header
 - Validate `Origin` header for security
+- `Mcp-Session-Id` header required on non-initialize requests
 
 ### Authentication
 - Bearer token authentication (current implementation)

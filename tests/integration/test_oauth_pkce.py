@@ -4,6 +4,7 @@ Integration tests for OAuth 2.0 with PKCE support
 Tests T4 Gate: MCP OAuth compliance for Claude Desktop
 """
 
+import os
 import pytest
 import requests
 import json
@@ -12,13 +13,16 @@ import base64
 import secrets
 from urllib.parse import urlencode, parse_qs, urlparse
 
+from src.mcp_remote_server import DEFAULT_REMOTE_REDIRECT_URIS
+
 
 class TestOAuthPKCE:
     """Test OAuth 2.0 implementation with PKCE for Claude Desktop compatibility"""
-    
-    # Use mcp-server when running in container, localhost otherwise
-    import os
-    BASE_URL = os.getenv("MCP_URL", "http://localhost:8081")
+
+    def _base_url(self) -> str:
+        """Resolve the base URL for the OAuth server under test."""
+
+        return os.getenv("MCP_URL") or os.getenv("TEST_BASE_URL", "http://localhost:8081")
     
     @pytest.fixture
     def pkce_challenge(self):
@@ -39,7 +43,8 @@ class TestOAuthPKCE:
     
     def test_oauth_discovery(self):
         """Test OAuth 2.0 Authorization Server Metadata discovery"""
-        response = requests.get(f"{self.BASE_URL}/.well-known/oauth-authorization-server")
+        base_url = self._base_url()
+        response = requests.get(f"{base_url}/.well-known/oauth-authorization-server")
         
         assert response.status_code == 200
         data = response.json()
@@ -72,8 +77,10 @@ class TestOAuthPKCE:
             "response_types": ["code"]
         }
         
+        base_url = self._base_url()
+
         response = requests.post(
-            f"{self.BASE_URL}/oauth/register",
+            f"{base_url}/oauth/register",
             json=registration_data
         )
         
@@ -83,7 +90,9 @@ class TestOAuthPKCE:
         # Required fields per RFC 7591
         assert 'client_id' in data
         assert 'client_id_issued_at' in data
-        assert data['redirect_uris'] == registration_data['redirect_uris']
+        assert registration_data['redirect_uris'][0] in data['redirect_uris']
+        for remote_uri in DEFAULT_REMOTE_REDIRECT_URIS:
+            assert remote_uri in data['redirect_uris']
         assert data['token_endpoint_auth_method'] == 'none'
     
     def test_authorization_with_pkce(self, pkce_challenge):
@@ -99,16 +108,75 @@ class TestOAuthPKCE:
             'code_challenge_method': pkce_challenge['method']
         }
         
+        base_url = self._base_url()
+
         response = requests.get(
-            f"{self.BASE_URL}/oauth/authorize",
+            f"{base_url}/oauth/authorize",
             params=auth_params,
             allow_redirects=False
         )
         
-        # Should return bank selector page
+        # Should return bank selector instructions when the client is missing
         assert response.status_code == 200
         assert 'Select Your Bank' in response.text or 'Enable Banking' in response.text
-    
+
+    def test_registered_client_receives_redirect(self, pkce_challenge):
+        """Registered clients should receive a 302 redirect to their callback."""
+        base_url = self._base_url()
+        registration_data = {
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "token_endpoint_auth_method": "none",
+        }
+        register = requests.post(f"{base_url}/oauth/register", json=registration_data)
+        assert register.status_code == 201
+        client_id = register.json()["client_id"]
+
+        auth_response = requests.get(
+            f"{base_url}/oauth/authorize",
+            params={
+                'response_type': 'code',
+                'client_id': client_id,
+                'redirect_uri': 'https://claude.ai/api/mcp/auth_callback',
+                'scope': 'accounts transactions',
+                'code_challenge': pkce_challenge['challenge'],
+                'code_challenge_method': pkce_challenge['method'],
+            },
+            allow_redirects=False,
+        )
+
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
+
+    def test_confidential_client_requires_secret(self):
+        """Confidential OAuth clients must present their secret to exchange tokens."""
+        base_url = self._base_url()
+
+        registration_data = {
+            "redirect_uris": ["https://chat.openai.com/backend-api/mcp/oauth/callback"],
+            "token_endpoint_auth_method": "client_secret_post",
+        }
+
+        register = requests.post(f"{base_url}/oauth/register", json=registration_data)
+        assert register.status_code == 201
+        registered = register.json()
+        client_id = registered["client_id"]
+        client_secret = registered["client_secret"]
+
+        token_payload = {
+            "grant_type": "authorization_code",
+            "code": "eb_session_confidential_123",
+            "redirect_uri": "https://chat.openai.com/backend-api/mcp/oauth/callback",
+            "client_id": client_id,
+        }
+
+        missing_secret = requests.post(f"{base_url}/oauth/token", data=token_payload)
+        assert missing_secret.status_code == 401
+
+        token_payload["client_secret"] = client_secret
+        with_secret = requests.post(f"{base_url}/oauth/token", data=token_payload)
+        assert with_secret.status_code == 200
+        assert "access_token" in with_secret.json()
+
     def test_token_exchange_with_pkce(self, pkce_challenge):
         """Test token endpoint with PKCE code verifier"""
         # Simulate authorization code (in real flow, this comes from callback)
@@ -121,8 +189,10 @@ class TestOAuthPKCE:
             'code_verifier': pkce_challenge['verifier']
         }
         
+        base_url = self._base_url()
+
         response = requests.post(
-            f"{self.BASE_URL}/oauth/token",
+            f"{base_url}/oauth/token",
             data=token_data
         )
         
@@ -147,8 +217,10 @@ class TestOAuthPKCE:
             'refresh_token': 'eb_session_test_refresh_123'
         }
         
+        base_url = self._base_url()
+
         response = requests.post(
-            f"{self.BASE_URL}/oauth/token",
+            f"{base_url}/oauth/token",
             data=refresh_data
         )
         
@@ -167,8 +239,10 @@ class TestOAuthPKCE:
             'token_type_hint': 'access_token'
         }
         
+        base_url = self._base_url()
+
         response = requests.post(
-            f"{self.BASE_URL}/oauth/revoke",
+            f"{base_url}/oauth/revoke",
             data=revoke_data
         )
         
@@ -177,16 +251,46 @@ class TestOAuthPKCE:
     
     def test_protected_resource_metadata(self):
         """Test OAuth 2.0 Protected Resource Metadata discovery"""
-        response = requests.get(f"{self.BASE_URL}/.well-known/oauth-protected-resource")
-        
+        base_url = self._base_url()
+        response = requests.get(f"{base_url}/.well-known/oauth-protected-resource")
+
         assert response.status_code == 200
         data = response.json()
-        
+
         # Required fields
         assert 'resource' in data
         assert 'authorization_server' in data
         assert data['resource'].endswith('/mcp')
-    
+
+    def test_manifest_discovery(self):
+        """Remote clients should discover metadata via /.well-known/mcp.json."""
+        base_url = self._base_url()
+        headers = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "mcp.example.com",
+        }
+        response = requests.get(f"{base_url}/.well-known/mcp.json", headers=headers)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data['transport']['endpoint'] == 'https://mcp.example.com/mcp'
+        assert 'authorization' in data
+        assert 'protocolVersions' in data
+
+        oauth_meta = requests.get(
+            f"{base_url}/.well-known/oauth-authorization-server",
+            headers=headers,
+        ).json()
+        assert oauth_meta['issuer'] == 'https://mcp.example.com'
+        assert oauth_meta['authorization_endpoint'].startswith('https://mcp.example.com/')
+
+        protected_meta = requests.get(
+            f"{base_url}/.well-known/oauth-protected-resource",
+            headers=headers,
+        ).json()
+        assert protected_meta['protectedResourceMetadata']['resource'] == 'https://mcp.example.com/mcp'
+
     def test_mcp_with_oauth_token(self):
         """Test MCP endpoint accepts OAuth Bearer token"""
         # Use a mock Enable Banking session as token
@@ -200,8 +304,10 @@ class TestOAuthPKCE:
             "id": 1
         }
         
+        base_url = self._base_url()
+
         response = requests.post(
-            f"{self.BASE_URL}/mcp",
+            f"{base_url}/mcp",
             json=mcp_request,
             headers={'Authorization': f'Bearer {mock_token}'}
         )
@@ -220,9 +326,11 @@ class TestOAuthPKCE:
     
     def test_claude_desktop_flow(self, pkce_challenge):
         """Test complete OAuth flow as Claude Desktop would do it"""
+        base_url = self._base_url()
+
         # Step 1: Dynamic client registration
         reg_response = requests.post(
-            f"{self.BASE_URL}/oauth/register",
+            f"{base_url}/oauth/register",
             json={
                 "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
                 "application_type": "native",
@@ -242,23 +350,22 @@ class TestOAuthPKCE:
             'code_challenge': pkce_challenge['challenge'],
             'code_challenge_method': 'S256'
         }
-        
+
         auth_response = requests.get(
-            f"{self.BASE_URL}/oauth/authorize",
+            f"{base_url}/oauth/authorize",
             params=auth_params,
             allow_redirects=False
         )
         
-        # Should get bank selector page
-        assert auth_response.status_code == 200
-        assert 'claude.ai/api/mcp/auth_callback' in auth_response.text
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
         
         # Step 3: Token exchange with PKCE verifier
         # (In real flow, code comes from callback after bank auth)
         mock_code = 'eb_session_claude_789'
-        
+
         token_response = requests.post(
-            f"{self.BASE_URL}/oauth/token",
+            f"{base_url}/oauth/token",
             data={
                 'grant_type': 'authorization_code',
                 'code': mock_code,
@@ -271,10 +378,10 @@ class TestOAuthPKCE:
         assert token_response.status_code == 200
         token_data = token_response.json()
         access_token = token_data['access_token']
-        
+
         # Step 4: Use token to access MCP
         mcp_response = requests.post(
-            f"{self.BASE_URL}/mcp",
+            f"{base_url}/mcp",
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/list",
@@ -286,6 +393,37 @@ class TestOAuthPKCE:
         
         assert mcp_response.status_code == 200
         assert 'tools' in mcp_response.json()['result']
+
+    def test_chatgpt_redirect_is_allowed(self):
+        """ChatGPT uses a different redirect URI that should be accepted automatically."""
+        base_url = self._base_url()
+
+        # Force-create a sandbox client using the fallback path (no pre-registration)
+        token_response = requests.post(
+            f"{base_url}/oauth/token",
+            data={
+                'grant_type': 'authorization_code',
+                'code': 'eb_chatgpt_test_code',
+                'client_id': 'chatgpt-test-client',
+                'redirect_uri': 'https://claude.ai/api/mcp/auth_callback',
+            },
+        )
+
+        assert token_response.status_code == 200
+
+        # Now hit authorize with ChatGPT's callback URI and ensure we get redirected
+        auth_response = requests.get(
+            f"{base_url}/oauth/authorize",
+            params={
+                'response_type': 'code',
+                'client_id': 'chatgpt-test-client',
+                'redirect_uri': 'https://chat.openai.com/aip/api/auth/callback',
+            },
+            allow_redirects=False,
+        )
+
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://chat.openai.com/')
 
 
 if __name__ == "__main__":
