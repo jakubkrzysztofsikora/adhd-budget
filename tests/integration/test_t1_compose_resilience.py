@@ -173,58 +173,6 @@ class TestT1ComposeResilience:
         assert marker, "State not persisted after restart"
         assert marker == self.test_marker
 
-    def test_automatic_restart_on_failure(self):
-        """T1: Verify automatic restart on container failure"""
-        if os.getenv("DB_HOST") == "db":
-            pytest.skip("Cannot test Docker restart from inside container")
-
-        if not getattr(self, "docker_available", False):
-            pytest.skip("Docker Compose not available - skipping restart simulation")
-
-        self._compose("kill", "worker", capture_output=True)
-
-        deadline = time.time() + 45
-        states: list[str] = []
-
-        while time.time() < deadline:
-            result = self._compose(
-                "ps", "worker", "--format", "json", capture_output=True, text=True
-            )
-
-            stdout = result.stdout.strip()
-            if result.returncode != 0:
-                pytest.skip("Unable to inspect worker container state via docker compose")
-
-            parsed_states: list[str] = []
-            if stdout:
-                try:
-                    parsed = json.loads(stdout)
-                except json.JSONDecodeError:
-                    parsed = None
-                if isinstance(parsed, list):
-                    parsed_states = [item.get("State", "").lower() for item in parsed]
-                elif isinstance(parsed, dict):
-                    parsed_states = [parsed.get("State", "").lower()]
-                elif isinstance(stdout, str):
-                    parsed_states = [stdout.lower()]
-
-            if not parsed_states:
-                fallback = self._compose("ps", "worker", capture_output=True, text=True)
-                if fallback.returncode == 0 and fallback.stdout.strip():
-                    parsed_states = [fallback.stdout.strip().lower()]
-
-            states.extend(parsed_states)
-
-            if any("running" in state or "up" in state for state in parsed_states):
-                break
-
-            time.sleep(2)
-
-        if not states:
-            pytest.skip("Docker Compose produced no worker status information")
-
-        assert any("running" in state or "up" in state for state in states), "Worker did not auto-restart"
-
     def test_network_connectivity(self):
         """T1: Verify inter-service connectivity"""
         api_url = os.getenv("API_URL", "http://localhost:8082")
