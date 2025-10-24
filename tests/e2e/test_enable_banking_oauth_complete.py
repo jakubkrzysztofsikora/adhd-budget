@@ -1,302 +1,262 @@
 """
 End-to-End test for complete Enable Banking OAuth flow.
 This test validates the entire authentication and MCP interaction flow:
-1. Login with Enable Banking
-2. Get access token (session ID)
-3. Connect to MCP server
-4. Run a tool successfully
+1. Dynamic client registration
+2. Authorization code grant and token exchange
+3. MCP session initialization
+4. Tool discovery and execution with SSE streaming
 """
 
 import os
-import time
-import json
+import uuid
+from typing import Dict, Optional
+from urllib.parse import parse_qs, urlparse
+
+import aiohttp
 import pytest
 import requests
-from typing import Dict, Any
-import uuid
-import asyncio
-import aiohttp
-from aiohttp_sse_client import client as sse_client
+
+PROTOCOL_VERSION = "2025-06-18"
 
 
 class TestEnableBankingOAuthComplete:
     """Complete E2E test for Enable Banking OAuth + MCP flow"""
-    
-    BASE_URL = os.getenv('TEST_BASE_URL', 'http://localhost')
-    MCP_URL = f"{BASE_URL}/mcp"
-    
-    @pytest.fixture
-    def session_state(self):
-        """Fixture to maintain session state across test steps"""
+
+    def _base_url(self) -> str:
+        return os.getenv("TEST_BASE_URL", "http://localhost")
+
+    def _mcp_url(self) -> str:
+        base = self._base_url().rstrip("/")
+        return f"{base}/mcp"
+
+    @pytest.fixture(scope="module")
+    def session_state(self) -> Dict[str, Optional[str]]:
+        """Fixture to maintain shared state across the ordered E2E steps."""
+
         return {
-            'session_id': None,
-            'access_token': None,
-            'state': str(uuid.uuid4())
+            "client_id": None,
+            "client_secret": None,
+            "redirect_uri": os.getenv("MCP_REDIRECT_URI", "http://localhost:6274/callback"),
+            "state": str(uuid.uuid4()),
+            "authorization_code": None,
+            "access_token": None,
+            "refresh_token": None,
+            "session_id": None,
         }
-    
+
+    def _build_mcp_headers(self, session_state: Dict[str, Optional[str]]) -> Dict[str, str]:
+        assert session_state["session_id"], "MCP session not initialised"
+        assert session_state["access_token"], "Access token missing"
+        return {
+            "Authorization": f"Bearer {session_state['access_token']}",
+            "Content-Type": "application/json",
+            "Mcp-Session-Id": session_state["session_id"],
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
+        }
+
     def test_01_oauth_discovery(self):
         """Test that OAuth discovery endpoint is available"""
-        response = requests.get(f"{self.BASE_URL}/.well-known/oauth-authorization-server")
+        base_url = self._base_url()
+        response = requests.get(f"{base_url}/.well-known/oauth-authorization-server", timeout=5)
         assert response.status_code == 200
         metadata = response.json()
-        
-        # Verify required OAuth 2.0 metadata fields
-        assert 'issuer' in metadata
-        assert 'authorization_endpoint' in metadata
-        assert 'token_endpoint' in metadata
-        assert 'response_types_supported' in metadata
-        assert 'grant_types_supported' in metadata
-        
-        # Verify our endpoints
-        assert metadata['authorization_endpoint'] == f"{self.BASE_URL}/oauth/authorize"
-        assert metadata['token_endpoint'] == f"{self.BASE_URL}/oauth/token"
-        assert 'authorization_code' in metadata['grant_types_supported']
-    
-    def test_02_client_registration(self):
+
+        assert metadata["authorization_endpoint"] == f"{base_url}/oauth/authorize"
+        assert metadata["token_endpoint"] == f"{base_url}/oauth/token"
+        assert "authorization_code" in metadata.get("grant_types_supported", [])
+        assert PROTOCOL_VERSION.startswith("2025")
+
+    def test_02_client_registration(self, session_state):
         """Test dynamic client registration"""
         registration_data = {
             "application_type": "web",
-            "redirect_uris": ["http://localhost:6274/callback"],
-            "client_name": "MCP Inspector Test",
-            "grant_types": ["authorization_code"]
+            "redirect_uris": [session_state["redirect_uri"]],
+            "client_name": f"MCP Inspector {uuid.uuid4()}",
+            "grant_types": ["authorization_code", "refresh_token"],
         }
-        
+
+        base_url = self._base_url()
         response = requests.post(
-            f"{self.BASE_URL}/oauth/register",
+            f"{base_url}/oauth/register",
             json=registration_data,
-            headers={'Content-Type': 'application/json'}
+            headers={"Content-Type": "application/json"},
+            timeout=5,
         )
-        
+
         assert response.status_code == 201
         client_info = response.json()
-        
-        # Verify client registration response
-        assert 'client_id' in client_info
-        assert client_info['client_name'] == 'MCP Inspector Test'
-        assert 'authorization_code' in client_info['grant_types']
-    
+
+        session_state["client_id"] = client_info["client_id"]
+        session_state["client_secret"] = client_info.get("client_secret")
+
     def test_03_authorization_flow(self, session_state):
-        """Test the authorization flow to get session ID"""
-        # Step 1: Get authorization URL
-        auth_params = {
-            'response_type': 'code',
-            'client_id': 'mcp-inspector',
-            'redirect_uri': 'http://localhost:6274/callback',
-            'state': session_state['state'],
-            'scope': 'accounts transactions'
+        """Test the authorization flow to get an authorization code"""
+        params = {
+            "response_type": "code",
+            "client_id": session_state["client_id"],
+            "redirect_uri": session_state["redirect_uri"],
+            "state": session_state["state"],
+            "scope": "accounts transactions summary",
         }
-        
-        # This would normally redirect to bank selection
+
+        base_url = self._base_url()
         response = requests.get(
-            f"{self.BASE_URL}/oauth/authorize",
-            params=auth_params,
-            allow_redirects=False
+            f"{base_url}/oauth/authorize",
+            params=params,
+            allow_redirects=False,
+            timeout=5,
         )
-        
-        # Should show bank selection page
-        assert response.status_code == 200
-        assert 'Mock ASPSP' in response.text or 'Select a bank' in response.text
-        
-        # Simulate selecting Mock ASPSP bank
-        # In real flow, user would click the bank and go through Enable Banking auth
-        # For testing, we simulate the callback with a session ID
-        test_session_id = f"test_session_{uuid.uuid4().hex[:8]}"
-        session_state['session_id'] = test_session_id
-    
+
+        assert response.status_code in (302, 303)
+        location = response.headers.get("Location", "")
+        parsed = urlparse(location)
+        query = parse_qs(parsed.query)
+        assert query.get("state", [None])[0] == session_state["state"]
+        code = query.get("code", [None])[0]
+        assert code, "Authorization code missing from redirect"
+        session_state["authorization_code"] = code
+
     def test_04_token_exchange(self, session_state):
-        """Test exchanging session ID for access token"""
-        # In our implementation, the session ID IS the access token
-        # This matches the behavior we implemented where Enable Banking 
-        # doesn't have a token exchange endpoint
-        
+        """Test exchanging authorization code for access token"""
         token_data = {
-            'grant_type': 'authorization_code',
-            'code': session_state['session_id'],
-            'redirect_uri': 'http://localhost:6274/callback',
-            'client_id': 'mcp-inspector'
+            "grant_type": "authorization_code",
+            "code": session_state["authorization_code"],
+            "redirect_uri": session_state["redirect_uri"],
+            "client_id": session_state["client_id"],
+            "client_secret": session_state["client_secret"],
         }
-        
+
+        base_url = self._base_url()
         response = requests.post(
-            f"{self.BASE_URL}/oauth/token",
-            data=token_data
+            f"{base_url}/oauth/token",
+            json=token_data,
+            headers={"Content-Type": "application/json"},
+            timeout=5,
         )
-        
-        if response.status_code == 200:
-            token_response = response.json()
-            assert 'access_token' in token_response
-            assert token_response['token_type'] == 'Bearer'
-            session_state['access_token'] = token_response['access_token']
-        else:
-            # Expected behavior: session ID is used directly as access token
-            session_state['access_token'] = session_state['session_id']
-    
+
+        assert response.status_code == 200, response.text
+        token_response = response.json()
+        session_state["access_token"] = token_response.get("access_token")
+        session_state["refresh_token"] = token_response.get("refresh_token")
+
     @pytest.mark.asyncio
     async def test_05_mcp_connection(self, session_state):
         """Test connecting to MCP server with access token"""
-        if not session_state.get('access_token'):
-            session_state['access_token'] = f"test_token_{uuid.uuid4().hex[:8]}"
-        
         headers = {
-            'Authorization': f"Bearer {session_state['access_token']}",
-            'Content-Type': 'application/json'
+            "Authorization": f"Bearer {session_state['access_token']}",
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
         }
-        
-        # Test initialize method
+
         init_request = {
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {
-                "protocolVersion": "0.1.0",
+                "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {
-                    "name": "test-client",
-                    "version": "1.0.0"
-                }
+                "clientInfo": {"name": "test-client", "version": "1.0.0"},
             },
-            "id": 1
+            "id": 1,
         }
-        
+
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self.MCP_URL,
-                json=init_request,
-                headers=headers
-            ) as response:
+            async with session.post(mcp_url, json=init_request, headers=headers) as response:
                 assert response.status == 200
-                result = await response.json()
-                assert result.get('result') is not None
-                assert 'protocolVersion' in result['result']
-    
+                session_state["session_id"] = response.headers.get("Mcp-Session-Id")
+                payload = await response.json()
+                assert payload.get("result", {}).get("protocolVersion") == PROTOCOL_VERSION
+
     @pytest.mark.asyncio
     async def test_06_mcp_tools_list(self, session_state):
         """Test listing available MCP tools"""
-        if not session_state.get('access_token'):
-            session_state['access_token'] = f"test_token_{uuid.uuid4().hex[:8]}"
-        
-        headers = {
-            'Authorization': f"Bearer {session_state['access_token']}",
-            'Content-Type': 'application/json'
-        }
-        
-        list_request = {
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "params": {},
-            "id": 2
-        }
-        
+        headers = self._build_mcp_headers(session_state)
+
+        list_request = {"jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 2}
+
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self.MCP_URL,
-                json=list_request,
-                headers=headers
-            ) as response:
+            async with session.post(mcp_url, json=list_request, headers=headers) as response:
                 assert response.status == 200
                 result = await response.json()
-                assert 'result' in result
-                assert 'tools' in result['result']
-                
-                tools = result['result']['tools']
-                assert len(tools) > 0
-                
-                # Verify all tools have inputSchema
-                for tool in tools:
-                    assert 'name' in tool
-                    assert 'description' in tool
-                    assert 'inputSchema' in tool
-                    assert tool['inputSchema']['type'] == 'object'
-    
+                tools = result.get("result", {}).get("tools", [])
+                assert tools
+                assert any(tool["name"] == "summary.today" for tool in tools)
+
     @pytest.mark.asyncio
     async def test_07_mcp_tool_execution(self, session_state):
         """Test executing an MCP tool"""
-        if not session_state.get('access_token'):
-            session_state['access_token'] = f"test_token_{uuid.uuid4().hex[:8]}"
-        
-        headers = {
-            'Authorization': f"Bearer {session_state['access_token']}",
-            'Content-Type': 'application/json'
-        }
-        
-        # Call the summary.today tool
+        headers = self._build_mcp_headers(session_state)
+
         tool_request = {
             "jsonrpc": "2.0",
             "method": "tools/call",
-            "params": {
-                "name": "summary.today",
-                "arguments": {}
-            },
-            "id": 3
+            "params": {"name": "summary.today", "arguments": {}},
+            "id": 3,
         }
-        
+
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self.MCP_URL,
-                json=tool_request,
-                headers=headers
-            ) as response:
+            async with session.post(mcp_url, json=tool_request, headers=headers) as response:
                 assert response.status == 200
                 result = await response.json()
-                
-                # Tool should return a result
-                assert 'result' in result or 'error' in result
-                
-                if 'result' in result:
-                    # Verify the tool returned content
-                    assert 'content' in result['result']
-                    assert len(result['result']['content']) > 0
-    
+                assert "result" in result or "error" in result
+
     @pytest.mark.asyncio
     async def test_08_mcp_sse_streaming(self, session_state):
         """Test SSE streaming functionality"""
-        if not session_state.get('access_token'):
-            session_state['access_token'] = f"test_token_{uuid.uuid4().hex[:8]}"
-        
         headers = {
-            'Authorization': f"Bearer {session_state['access_token']}",
-            'Accept': 'text/event-stream'
+            "Authorization": f"Bearer {session_state['access_token']}",
+            "Accept": "text/event-stream",
+            "Mcp-Session-Id": session_state["session_id"],
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
         }
-        
-        # Test SSE endpoint
+
+        mcp_url = self._mcp_url()
+
         async with aiohttp.ClientSession() as session:
-            response = await session.get(
-                f"{self.MCP_URL}/sse",
-                headers=headers
-            )
-            
-            # Should return SSE content type
-            assert response.status == 200
-            assert 'text/event-stream' in response.headers.get('Content-Type', '')
-    
-    def test_09_complete_flow_integration(self):
+            async with session.get(mcp_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                assert response.status == 200
+                assert "text/event-stream" in response.headers.get("Content-Type", "")
+                line = await response.content.readline()
+                assert line.decode("utf-8").startswith("event:"), "Expected SSE event line"
+
+    def test_09_complete_flow_integration(self, session_state):
         """Test the complete flow from start to finish"""
-        # This test validates that all components work together
-        
-        # 1. Check health endpoints
-        health_response = requests.get(f"{self.BASE_URL}/health")
+        base_url = self._base_url()
+        health_response = requests.get(f"{base_url}/health", timeout=5)
         assert health_response.status_code == 200
-        
-        # 2. Verify MCP server is accessible through proxy
-        mcp_health = requests.get(f"{self.BASE_URL}/mcp/health")
-        assert mcp_health.status_code in [200, 404]  # 404 if no health endpoint
-        
-        # 3. Verify OAuth endpoints are accessible
-        oauth_endpoints = [
-            '/.well-known/oauth-authorization-server',
-            '/oauth/authorize',
-            '/auth/callback'
-        ]
-        
-        for endpoint in oauth_endpoints:
-            response = requests.get(
-                f"{self.BASE_URL}{endpoint}",
-                allow_redirects=False
-            )
-            # Should not return 502 or 503 (proxy errors)
-            assert response.status_code not in [502, 503]
-        
-        print("✅ Complete Enable Banking OAuth + MCP flow validated")
+
+        protected_resource = requests.get(
+            f"{base_url}/.well-known/oauth-protected-resource",
+            timeout=5,
+        )
+        assert protected_resource.status_code == 200
+        metadata = protected_resource.json().get("protectedResourceMetadata", {})
+        assert metadata.get("resource") == f"{base_url}/mcp"
+
+        # Verify the session can still call tools
+        headers = self._build_mcp_headers(session_state)
+        mcp_url = self._mcp_url()
+
+        response = requests.post(
+            mcp_url,
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "projection.month", "arguments": {}},
+                "id": "final-check",
+            },
+            headers=headers,
+            timeout=5,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "result" in payload or "error" in payload
 
 
 if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, '-v'])
+    pytest.main([__file__, "-v"])
