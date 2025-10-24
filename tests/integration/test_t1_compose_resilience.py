@@ -23,6 +23,11 @@ class TestT1ComposeResilience:
         cls.test_marker = f"test_marker_{int(time.time())}"
         cls.docker_available = _docker_compose_available()
 
+        # Provide sane defaults for local/CI runs where secrets are not injected.
+        # A missing password prevents the Postgres container from ever starting,
+        # which in turn causes connection-refused errors throughout the suite.
+        os.environ.setdefault("DB_PASSWORD", "postgres")
+
         # When running in Docker test container, services are already up
         if os.getenv("DB_HOST") == "db":
             # Running inside Docker, skip docker commands
