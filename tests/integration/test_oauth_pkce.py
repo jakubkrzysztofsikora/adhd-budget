@@ -13,6 +13,8 @@ import base64
 import secrets
 from urllib.parse import urlencode, parse_qs, urlparse
 
+from src.mcp_remote_server import DEFAULT_REMOTE_REDIRECT_URIS
+
 
 class TestOAuthPKCE:
     """Test OAuth 2.0 implementation with PKCE for Claude Desktop compatibility"""
@@ -88,7 +90,9 @@ class TestOAuthPKCE:
         # Required fields per RFC 7591
         assert 'client_id' in data
         assert 'client_id_issued_at' in data
-        assert data['redirect_uris'] == registration_data['redirect_uris']
+        assert registration_data['redirect_uris'][0] in data['redirect_uris']
+        for remote_uri in DEFAULT_REMOTE_REDIRECT_URIS:
+            assert remote_uri in data['redirect_uris']
         assert data['token_endpoint_auth_method'] == 'none'
     
     def test_authorization_with_pkce(self, pkce_challenge):
@@ -112,10 +116,37 @@ class TestOAuthPKCE:
             allow_redirects=False
         )
         
-        # Should return bank selector page
+        # Should return bank selector instructions when the client is missing
         assert response.status_code == 200
         assert 'Select Your Bank' in response.text or 'Enable Banking' in response.text
-    
+
+    def test_registered_client_receives_redirect(self, pkce_challenge):
+        """Registered clients should receive a 302 redirect to their callback."""
+        base_url = self._base_url()
+        registration_data = {
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "token_endpoint_auth_method": "none",
+        }
+        register = requests.post(f"{base_url}/oauth/register", json=registration_data)
+        assert register.status_code == 201
+        client_id = register.json()["client_id"]
+
+        auth_response = requests.get(
+            f"{base_url}/oauth/authorize",
+            params={
+                'response_type': 'code',
+                'client_id': client_id,
+                'redirect_uri': 'https://claude.ai/api/mcp/auth_callback',
+                'scope': 'accounts transactions',
+                'code_challenge': pkce_challenge['challenge'],
+                'code_challenge_method': pkce_challenge['method'],
+            },
+            allow_redirects=False,
+        )
+
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
+
     def test_token_exchange_with_pkce(self, pkce_challenge):
         """Test token endpoint with PKCE code verifier"""
         # Simulate authorization code (in real flow, this comes from callback)
@@ -204,14 +235,31 @@ class TestOAuthPKCE:
     def test_manifest_discovery(self):
         """Remote clients should discover metadata via /.well-known/mcp.json."""
         base_url = self._base_url()
-        response = requests.get(f"{base_url}/.well-known/mcp.json")
+        headers = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "mcp.example.com",
+        }
+        response = requests.get(f"{base_url}/.well-known/mcp.json", headers=headers)
 
         assert response.status_code == 200
         data = response.json()
 
-        assert data['transport']['endpoint'].endswith('/mcp')
+        assert data['transport']['endpoint'] == 'https://mcp.example.com/mcp'
         assert 'authorization' in data
         assert 'protocolVersions' in data
+
+        oauth_meta = requests.get(
+            f"{base_url}/.well-known/oauth-authorization-server",
+            headers=headers,
+        ).json()
+        assert oauth_meta['issuer'] == 'https://mcp.example.com'
+        assert oauth_meta['authorization_endpoint'].startswith('https://mcp.example.com/')
+
+        protected_meta = requests.get(
+            f"{base_url}/.well-known/oauth-protected-resource",
+            headers=headers,
+        ).json()
+        assert protected_meta['protectedResourceMetadata']['resource'] == 'https://mcp.example.com/mcp'
 
     def test_mcp_with_oauth_token(self):
         """Test MCP endpoint accepts OAuth Bearer token"""
@@ -279,9 +327,8 @@ class TestOAuthPKCE:
             allow_redirects=False
         )
         
-        # Should get bank selector page
-        assert auth_response.status_code == 200
-        assert 'claude.ai/api/mcp/auth_callback' in auth_response.text
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
         
         # Step 3: Token exchange with PKCE verifier
         # (In real flow, code comes from callback after bank auth)
@@ -345,12 +392,8 @@ class TestOAuthPKCE:
             allow_redirects=False,
         )
 
-        assert auth_response.status_code in (302, 200)
-        if auth_response.status_code == 302:
-            assert auth_response.headers['Location'].startswith('https://chat.openai.com/')
-        else:
-            # Non redirect responses should still embed the callback link for manual continuation
-            assert 'chat.openai.com' in auth_response.text
+        assert auth_response.status_code == 302
+        assert auth_response.headers['Location'].startswith('https://chat.openai.com/')
 
 
 if __name__ == "__main__":

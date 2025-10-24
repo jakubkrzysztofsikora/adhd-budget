@@ -55,10 +55,13 @@ DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 ALLOWED_ORIGINS = (
     "https://claude.ai",
     "https://www.claude.ai",
+    "https://app.claude.ai",
+    "https://lite.claude.ai",
     "https://chat.openai.com",
     "https://www.chat.openai.com",
     "https://chatgpt.com",
     "https://www.chatgpt.com",
+    "https://platform.openai.com",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 )
@@ -66,10 +69,46 @@ ALLOWED_ORIGINS = (
 DEFAULT_REMOTE_REDIRECT_URIS = (
     "https://www.claude.ai/api/auth/callback",
     "https://claude.ai/api/auth/callback",
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://www.claude.ai/api/mcp/auth_callback",
+    "https://app.claude.ai/api/auth/callback",
+    "https://lite.claude.ai/api/auth/callback",
     "https://chat.openai.com/aip/api/auth/callback",
-    "https://chat.openai.com/backend-api/mcp/callback",
     "https://chat.openai.com/api/auth/callback",
+    "https://chat.openai.com/backend-api/mcp/callback",
+    "https://chat.openai.com/backend-api/mcp/oauth/callback",
+    "https://chat.openai.com/backend-api/mcp/authorize/callback",
+    "https://www.chat.openai.com/backend-api/mcp/callback",
+    "https://www.chat.openai.com/backend-api/mcp/oauth/callback",
+    "https://www.chat.openai.com/backend-api/mcp/authorize/callback",
 )
+
+REMOTE_REDIRECT_PREFIXES = (
+    "https://claude.ai/",
+    "https://www.claude.ai/",
+    "https://app.claude.ai/",
+    "https://lite.claude.ai/",
+    "https://chat.openai.com/",
+    "https://www.chat.openai.com/",
+    "https://chatgpt.com/",
+    "https://www.chatgpt.com/",
+)
+
+DEFAULT_OAUTH_ISSUER = "https://auth.local.adhd-budget"
+
+
+def _external_base_url(request: web.Request) -> str:
+    """Return the externally visible base URL accounting for reverse proxies."""
+
+    proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or request.host
+    return f"{proto}://{host}"
+
+
+def _is_allowed_remote_redirect(uri: Optional[str]) -> bool:
+    if not uri:
+        return False
+    return any(uri.startswith(prefix) for prefix in REMOTE_REDIRECT_PREFIXES)
 
 
 def _json_dumps(payload: Dict[str, Any]) -> bytes:
@@ -144,7 +183,7 @@ class OAuthProvider:
         self.auth_codes: Dict[str, Dict[str, Any]] = {}
         self.access_tokens: Dict[str, Dict[str, Any]] = {}
         self.refresh_tokens: Dict[str, Dict[str, Any]] = {}
-        self.issuer = "https://auth.local.adhd-budget"
+        self.issuer = os.getenv("OAUTH_ISSUER", DEFAULT_OAUTH_ISSUER)
 
     def register_client(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         redirect_uris = payload.get("redirect_uris") or payload.get("redirect_uri")
@@ -153,7 +192,25 @@ class OAuthProvider:
         if not redirect_uris:
             raise web.HTTPBadRequest(text="Missing redirect_uris")
 
-        unique_redirects = list(dict.fromkeys(redirect_uris))
+        unique_redirects: list[str] = []
+        for uri in redirect_uris:
+            if not uri or (
+                os.getenv("ENABLE_ENV", "sandbox") == "production"
+                and not _is_allowed_remote_redirect(uri)
+                and not uri.startswith((
+                    "http://localhost",
+                    "https://localhost",
+                    "http://127.0.0.1",
+                    "https://127.0.0.1",
+                ))
+            ):
+                raise web.HTTPBadRequest(text="Invalid redirect_uris entry")
+            if uri not in unique_redirects:
+                unique_redirects.append(uri)
+
+        for candidate in DEFAULT_REMOTE_REDIRECT_URIS:
+            if candidate not in unique_redirects:
+                unique_redirects.append(candidate)
 
         client_id = secrets.token_urlsafe(24)
         client_secret = secrets.token_urlsafe(32)
@@ -190,7 +247,9 @@ class OAuthProvider:
     ) -> str:
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
-            if os.getenv("ENABLE_ENV", "sandbox") != "production":
+            if _is_allowed_remote_redirect(redirect_uri):
+                client["redirect_uris"].append(redirect_uri)
+            elif os.getenv("ENABLE_ENV", "sandbox") != "production":
                 client["redirect_uris"].append(redirect_uri)
             else:
                 raise web.HTTPBadRequest(text="Invalid redirect_uri")
@@ -425,7 +484,7 @@ class MCPApplication:
         self.app.router.add_post("/oauth/revoke", self.oauth_revoke)
 
     async def mcp_manifest(self, request: web.Request) -> web.Response:
-        base_url = f"{request.scheme}://{request.host}"
+        base_url = _external_base_url(request)
         manifest = {
             "name": "adhd-budget-mcp",
             "version": "1.0.0",
@@ -783,12 +842,16 @@ class MCPApplication:
         return {"transactions": transactions, "since": since, "limit": limit}
 
     async def oauth_metadata(self, request: web.Request) -> web.Response:
+        base_url = _external_base_url(request)
+        issuer = os.getenv("OAUTH_ISSUER") or base_url
+        self.oauth.issuer = issuer
+
         metadata = {
-            "issuer": self.oauth.issuer,
-            "authorization_endpoint": f"{request.scheme}://{request.host}/oauth/authorize",
-            "token_endpoint": f"{request.scheme}://{request.host}/oauth/token",
-            "revocation_endpoint": f"{request.scheme}://{request.host}/oauth/revoke",
-            "registration_endpoint": f"{request.scheme}://{request.host}/oauth/register",
+            "issuer": issuer,
+            "authorization_endpoint": f"{base_url}/oauth/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "revocation_endpoint": f"{base_url}/oauth/revoke",
+            "registration_endpoint": f"{base_url}/oauth/register",
             "scopes_supported": ["transactions", "accounts", "summary"],
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
@@ -798,10 +861,14 @@ class MCPApplication:
         return web.json_response(metadata)
 
     async def oauth_protected_resource(self, request: web.Request) -> web.Response:
+        base_url = _external_base_url(request)
+        issuer = os.getenv("OAUTH_ISSUER") or base_url
+        self.oauth.issuer = issuer
+
         metadata = {
-            "resource": f"{request.scheme}://{request.host}/mcp",
-            "authorization_server": self.oauth.issuer,
-            "authorization_servers": [self.oauth.issuer],
+            "resource": f"{base_url}/mcp",
+            "authorization_server": issuer,
+            "authorization_servers": [issuer],
         }
         payload = {"protectedResourceMetadata": metadata, **metadata}
         return web.json_response(payload)
@@ -845,8 +912,9 @@ class MCPApplication:
             query["state"] = state
         location = f"{redirect_uri}?{urlencode(query)}"
 
+        html_body: Optional[str] = None
         if client.get("token_endpoint_auth_method") == "none":
-            html = textwrap.dedent(
+            html_body = textwrap.dedent(
                 f"""
                 <!doctype html>
                 <html>
@@ -859,9 +927,12 @@ class MCPApplication:
                 </html>
                 """
             ).strip()
-            return web.Response(text=html, content_type="text/html")
 
-        raise web.HTTPFound(location=location)
+        headers = {"Location": location, "Cache-Control": "no-store"}
+        if html_body and "text/html" in request.headers.get("Accept", "text/html"):
+            return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
+
+        return web.Response(status=302, headers=headers)
 
     async def oauth_token(self, request: web.Request) -> web.Response:
         if request.content_type == "application/json":

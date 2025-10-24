@@ -96,8 +96,11 @@ remote deployments:
 - ``/oauth/token`` – Exchanges authorization codes or refresh tokens
 - ``/oauth/revoke`` – Revokes access or refresh tokens
 
-Always register ``https://www.claude.ai/api/auth/callback`` as a redirect URI
-when deploying for Claude Web/Desktop.
+The server automatically seeds Claude and ChatGPT redirect URIs (see
+``DEFAULT_REMOTE_REDIRECT_URIS``) and mirrors any ``X-Forwarded-Proto`` /
+``X-Forwarded-Host`` headers so manifests and OAuth metadata point at the
+public hostname behind your reverse proxy. Deployments can override the
+issuer explicitly with ``OAUTH_ISSUER`` if required.
 
 ### Remote connector setup
 
@@ -113,22 +116,23 @@ automatically.
 2. Ensure the domain is reachable from ChatGPT and that the manifest is
    accessible at ``https://mcp.example.com/.well-known/mcp.json``.
 3. In ChatGPT → Settings → Connectors → Advanced → Developer Mode, add the
-   base URL (``https://mcp.example.com``). ChatGPT will automatically perform
-   dynamic client registration and use the built-in redirect URI
-   ``https://chat.openai.com/aip/api/auth/callback``.
-4. The server now auto-whitelists the ChatGPT redirect URL in non-production
-   environments so the OAuth consent screen completes successfully.
+   base URL (``https://mcp.example.com``). ChatGPT performs discovery and
+   dynamic registration automatically.
+4. The OAuth server now issues HTTP 302 redirects directly to the ChatGPT
+   callback and recognises the entire ``https://chat.openai.com/`` redirect
+   family (``DEFAULT_REMOTE_REDIRECT_URIS``) even in production builds.
 
 **Claude Web & Desktop**
 
 1. Visit Claude → Settings → Remote Desktops → Add new.
-2. Enter your HTTPS endpoint (e.g. ``https://mcp.example.com``). Claude will
-   fetch ``/.well-known/mcp.json`` and register a client.
-3. Complete the OAuth flow, which uses the redirect URIs documented in
-   ``DEFAULT_REMOTE_REDIRECT_URIS`` (both ``https://claude.ai`` variants are
-   pre-authorised).
-4. Claude Desktop can also connect locally using ``npx mcp-remote`` if you
-   prefer not to expose the service publicly.
+2. Enter your HTTPS endpoint (e.g. ``https://mcp.example.com``). Claude fetches
+   ``/.well-known/mcp.json`` (respecting forwarded headers) and registers a
+   client automatically.
+3. Complete the OAuth flow—the server now returns a 302 redirect straight back
+   to Claude's callback URL and accepts the ``https://claude.ai/`` and
+   ``https://app.claude.ai/`` variants out of the box.
+4. Claude Desktop can still connect locally via ``npx mcp-remote`` during
+   development if you prefer not to expose the service publicly.
 
 ### Verifying with MCP Inspector
 
