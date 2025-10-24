@@ -3,12 +3,12 @@
     "adhd-budget": {
       "transport": {
         "type": "streamable-http",
-        "uri": "http://host.docker.internal/mcp"
+        "uri": "http://host.docker.internal:8000/mcp"
       },
       "auth": {
         "type": "oauth2",
-        "authorization_url": "http://host.docker.internal/oauth/authorize",
-        "token_url": "http://host.docker.internal/oauth/token",
+        "authorization_url": "http://host.docker.internal:8000/oauth/authorize",
+        "token_url": "http://host.docker.internal:8000/oauth/token",
         "client_id": "mcp-inspector",
         "scopes": ["transactions", "accounts"]
       }
