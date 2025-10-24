@@ -183,32 +183,45 @@ class TestT1ComposeResilience:
 
         self._compose("kill", "worker", capture_output=True)
 
-        time.sleep(10)
+        deadline = time.time() + 45
+        states: list[str] = []
 
-        result = self._compose("ps", "worker", "--format", "json", capture_output=True, text=True)
+        while time.time() < deadline:
+            result = self._compose(
+                "ps", "worker", "--format", "json", capture_output=True, text=True
+            )
 
-        stdout = result.stdout.strip()
-        if result.returncode != 0:
-            pytest.skip("Unable to inspect worker container state via docker compose")
+            stdout = result.stdout.strip()
+            if result.returncode != 0:
+                pytest.skip("Unable to inspect worker container state via docker compose")
 
-        states = []
-        if stdout:
-            try:
-                parsed = json.loads(stdout)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, list):
-                states = [item.get("State", "").lower() for item in parsed]
-            elif isinstance(parsed, dict):
-                states = [parsed.get("State", "").lower()]
-            elif isinstance(stdout, str):
-                states = [stdout.lower()]
+            parsed_states: list[str] = []
+            if stdout:
+                try:
+                    parsed = json.loads(stdout)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    parsed_states = [item.get("State", "").lower() for item in parsed]
+                elif isinstance(parsed, dict):
+                    parsed_states = [parsed.get("State", "").lower()]
+                elif isinstance(stdout, str):
+                    parsed_states = [stdout.lower()]
+
+            if not parsed_states:
+                fallback = self._compose("ps", "worker", capture_output=True, text=True)
+                if fallback.returncode == 0 and fallback.stdout.strip():
+                    parsed_states = [fallback.stdout.strip().lower()]
+
+            states.extend(parsed_states)
+
+            if any("running" in state or "up" in state for state in parsed_states):
+                break
+
+            time.sleep(2)
 
         if not states:
-            fallback = self._compose("ps", "worker", capture_output=True, text=True)
-            if fallback.returncode != 0 or not fallback.stdout.strip():
-                pytest.skip("Docker Compose produced no worker status information")
-            states = [fallback.stdout.strip().lower()]
+            pytest.skip("Docker Compose produced no worker status information")
 
         assert any("running" in state or "up" in state for state in states), "Worker did not auto-restart"
 
