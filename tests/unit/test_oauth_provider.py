@@ -1,7 +1,9 @@
+import base64
+
 import pytest
 from aiohttp import web
 
-from src.mcp_remote_server import OAuthProvider
+from src.mcp_remote_server import OAuthProvider, _apply_basic_auth_credentials
 
 
 def test_validate_client_requires_secret_when_confidential():
@@ -45,3 +47,20 @@ def test_validate_client_rejects_incorrect_secret():
 
     with pytest.raises(web.HTTPUnauthorized):
         provider._validate_client(client["client_id"], "wrong", require_secret=True)
+
+
+def test_apply_basic_auth_credentials_populates_missing_fields():
+    payload = {}
+    header = base64.b64encode(b"client-id:super-secret").decode("ascii")
+    result = _apply_basic_auth_credentials(payload, {"Authorization": f"Basic {header}"})
+
+    assert result["client_id"] == "client-id"
+    assert result["client_secret"] == "super-secret"
+
+
+def test_apply_basic_auth_credentials_rejects_mismatched_client_id():
+    header = base64.b64encode(b"client-id:super-secret").decode("ascii")
+    with pytest.raises(web.HTTPUnauthorized):
+        _apply_basic_auth_credentials(
+            {"client_id": "other"}, {"Authorization": f"Basic {header}"}
+        )
