@@ -101,7 +101,17 @@ def _external_base_url(request: web.Request) -> str:
     """Return the externally visible base URL accounting for reverse proxies."""
 
     proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+
+    # Cloudflare support: check CF-Visitor header
+    cf_visitor = request.headers.get("CF-Visitor")
+    if cf_visitor and '"scheme":"https"' in cf_visitor:
+        proto = "https"
+
+    # Force HTTPS for known production domains
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or request.host
+    if "adhdbudget.bieda.it" in host:
+        proto = "https"
+
     return f"{proto}://{host}"
 
 
