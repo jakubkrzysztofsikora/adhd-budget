@@ -25,16 +25,20 @@ if ! curl -s -f -o /dev/null "$MCP_URL/health" 2>/dev/null; then
     MCP_URL="https://adhdbudget.bieda.it"
 fi
 
-# 1. Check protocol version support
+# 1. Check protocol version support and get session ID
 echo -e "\n${YELLOW}[1] Checking protocol version...${NC}"
-RESPONSE=$(curl -s -X POST "$MCP_URL/mcp" \
+INIT_RESPONSE=$(curl -s -i -X POST "$MCP_URL/mcp" \
     -H "Authorization: Bearer $MCP_TOKEN" \
     -H "Content-Type: application/json" \
     -H "MCP-Protocol-Version: 2025-06-18" \
     -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"validator","version":"1.0.0"}},"id":1}' 2>/dev/null || echo "{}")
 
+SESSION_ID=$(echo "$INIT_RESPONSE" | grep -i "Mcp-Session-Id:" | cut -d' ' -f2 | tr -d '\r\n')
+RESPONSE=$(echo "$INIT_RESPONSE" | tail -n 1)
+
 if echo "$RESPONSE" | grep -q '"protocolVersion"'; then
     echo -e "${GREEN}✓ Protocol version negotiation supported${NC}"
+    echo -e "  Session ID: $SESSION_ID"
 else
     echo -e "${RED}✗ Protocol version negotiation failed${NC}"
     FAILED=1
@@ -48,8 +52,10 @@ for METHOD in "${METHODS[@]}"; do
     RESPONSE=$(curl -s -X POST "$MCP_URL/mcp" \
         -H "Authorization: Bearer $MCP_TOKEN" \
         -H "Content-Type: application/json" \
+        -H "MCP-Protocol-Version: 2025-06-18" \
+        -H "Mcp-Session-Id: $SESSION_ID" \
         -d "{\"jsonrpc\":\"2.0\",\"method\":\"$METHOD\",\"params\":{},\"id\":1}" 2>/dev/null || echo "{}")
-    
+
     if echo "$RESPONSE" | grep -q '"result"'; then
         echo -e "${GREEN}✓ Method '$METHOD' working${NC}"
     else
@@ -58,26 +64,19 @@ for METHOD in "${METHODS[@]}"; do
     fi
 done
 
-# 3. Check SSE endpoint
+# 3. Check SSE endpoint (requires session ID)
 echo -e "\n${YELLOW}[3] Checking SSE streaming support...${NC}"
-SSE_RESPONSE=$(curl -s -N -m 2 "$MCP_URL/mcp/stream" \
+SSE_RESPONSE=$(curl -s -N -m 2 "$MCP_URL/mcp" \
     -H "Authorization: Bearer $MCP_TOKEN" \
+    -H "MCP-Protocol-Version: 2025-06-18" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
     -H "Accept: text/event-stream" 2>&1 | head -n 5)
 
 if echo "$SSE_RESPONSE" | grep -q "event:"; then
     echo -e "${GREEN}✓ SSE streaming functional${NC}"
 else
-    # Check alternate endpoint
-    SSE_RESPONSE=$(curl -s -N -m 2 "$MCP_URL/sse" \
-        -H "Authorization: Bearer $MCP_TOKEN" \
-        -H "Accept: text/event-stream" 2>&1 | head -n 5)
-    
-    if echo "$SSE_RESPONSE" | grep -q "event:"; then
-        echo -e "${GREEN}✓ SSE streaming functional (alternate endpoint)${NC}"
-    else
-        echo -e "${RED}✗ SSE streaming not working${NC}"
-        FAILED=1
-    fi
+    echo -e "${RED}✗ SSE streaming not working${NC}"
+    FAILED=1
 fi
 
 # 4. Check JSON-RPC 2.0 compliance

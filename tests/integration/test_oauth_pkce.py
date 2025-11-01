@@ -107,7 +107,7 @@ class TestOAuthPKCE:
             'code_challenge': pkce_challenge['challenge'],
             'code_challenge_method': pkce_challenge['method']
         }
-        
+
         base_url = self._base_url()
 
         response = requests.get(
@@ -115,10 +115,12 @@ class TestOAuthPKCE:
             params=auth_params,
             allow_redirects=False
         )
-        
-        # Should return bank selector instructions when the client is missing
-        assert response.status_code == 200
-        assert 'Select Your Bank' in response.text or 'Enable Banking' in response.text
+
+        # Should auto-register allowed remote clients (Claude, ChatGPT) and redirect
+        assert response.status_code == 302
+        assert response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
+        assert 'code=' in response.headers['Location']
+        assert 'state=test-state-123' in response.headers['Location']
 
     def test_registered_client_receives_redirect(self, pkce_challenge):
         """Registered clients should receive a 302 redirect to their callback."""

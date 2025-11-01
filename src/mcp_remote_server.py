@@ -687,6 +687,10 @@ class MCPApplication:
         payload = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
         return web.json_response(payload, status=status)
 
+    async def rpc_ping(self, params: Dict[str, Any], request: web.Request, session: Session) -> Dict[str, Any]:
+        """Ping method for keep-alive checks."""
+        return {}
+
     async def rpc_tools_list(self, params: Dict[str, Any], request: web.Request, session: Session) -> Dict[str, Any]:
         tools = []
         for name, handler in self.tools.items():
@@ -892,19 +896,50 @@ class MCPApplication:
 
         client = self.oauth.clients.get(client_id)
         if not client:
-            html = textwrap.dedent(
-                """
-                <!doctype html>
-                <html>
-                    <head><title>Enable Banking Setup</title></head>
-                    <body>
-                        <h1>Select Your Bank</h1>
-                        <p>Register this client via /oauth/register before starting the OAuth flow.</p>
-                    </body>
-                </html>
-                """
-            ).strip()
-            return web.Response(text=html, content_type="text/html")
+            # Auto-register clients from allowed remote platforms (ChatGPT, Claude)
+            if _is_allowed_remote_redirect(redirect_uri):
+                LOGGER.info("Auto-registering remote client for redirect_uri: %s", redirect_uri)
+                try:
+                    client = self.oauth.register_client({
+                        "redirect_uris": [redirect_uri],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                        "scope": scope,
+                        "token_endpoint_auth_method": "none",  # Public client
+                    })
+                    # Override the generated client_id with the one from the request
+                    self.oauth.clients.pop(client["client_id"], None)
+                    client["client_id"] = client_id
+                    self.oauth.clients[client_id] = client
+                except Exception as exc:
+                    LOGGER.error("Failed to auto-register client: %s", exc)
+                    html = textwrap.dedent(
+                        """
+                        <!doctype html>
+                        <html>
+                            <head><title>Authorization Error</title></head>
+                            <body>
+                                <h1>Authorization Failed</h1>
+                                <p>Could not register client. Please try again.</p>
+                            </body>
+                        </html>
+                        """
+                    ).strip()
+                    return web.Response(text=html, content_type="text/html", status=400)
+            else:
+                html = textwrap.dedent(
+                    """
+                    <!doctype html>
+                    <html>
+                        <head><title>Enable Banking Setup</title></head>
+                        <body>
+                            <h1>Select Your Bank</h1>
+                            <p>Register this client via /oauth/register before starting the OAuth flow.</p>
+                        </body>
+                    </html>
+                    """
+                ).strip()
+                return web.Response(text=html, content_type="text/html")
 
         code = self.oauth.issue_authorization_code(client_id, redirect_uri, scope, state, resource)
         query = {"code": code}

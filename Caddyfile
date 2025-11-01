@@ -30,11 +30,16 @@
         reverse_proxy mcp-server:8081 {
             # Disable buffering for SSE
             flush_interval -1
-            
+
             # Headers for SSE
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
             header_down X-Accel-Buffering no
+
+            # Forward proxy headers for OAuth metadata
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
     
@@ -43,11 +48,16 @@
         reverse_proxy mcp-server:8081 {
             # Disable buffering for SSE
             flush_interval -1
-            
+
             # Headers for SSE
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
             header_down X-Accel-Buffering no
+
+            # Forward proxy headers
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
 
