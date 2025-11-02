@@ -999,7 +999,36 @@ class MCPApplication:
 
 
 def create_app() -> web.Application:
-    logging.basicConfig(level=logging.INFO)
+    # Configure logging to both console and file
+    log_dir = os.getenv("LOG_DIR", "/var/log/mcp")
+    log_file = os.path.join(log_dir, "mcp-server.log")
+
+    # Create log directory if it doesn't exist, fall back to console-only if permission denied
+    handlers = [logging.StreamHandler()]  # Always log to console
+    file_logging_status = None
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, mode='a'))  # Add file logging if possible
+        file_logging_status = f"SUCCESS: Logging to {log_file}"
+    except PermissionError as e:
+        file_logging_status = f"WARNING: File logging disabled - Permission denied for {log_dir}: {e}"
+    except OSError as e:
+        file_logging_status = f"WARNING: File logging disabled - OS error for {log_dir}: {e}"
+    except Exception as e:
+        file_logging_status = f"ERROR: File logging disabled - Unexpected error: {type(e).__name__}: {e}"
+
+    # Configure logging handlers
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=handlers
+    )
+
+    # Log the file logging status (will appear in console and file if file logging succeeded)
+    LOGGER.info(f"File logging configuration: {file_logging_status}")
+    if "WARNING" in file_logging_status or "ERROR" in file_logging_status:
+        LOGGER.info("Continuing with console-only logging - all logs will still be visible via docker logs")
+
     server = MCPApplication()
     return server.app
 

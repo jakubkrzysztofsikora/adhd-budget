@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     volumes:
       - ./keys:/app/keys:ro
+      - mcp_logs:/var/log/mcp
     environment:
       - MCP_PORT=8081
       - MCP_HOST=0.0.0.0
@@ -61,6 +62,11 @@ services:
     cpus: '0.25'
     cap_drop:
       - ALL
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   worker:
     image: python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
@@ -186,6 +192,36 @@ services:
       timeout: 10s
       retries: 3
 
+  log-viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile.log-viewer
+    volumes:
+      - mcp_logs:/var/log/mcp:ro
+      - ./certs:/app/certs:ro
+    environment:
+      - LOG_DIR=/var/log/mcp
+      - LOG_VIEWER_PORT=8888
+      - CERT_FILE=/app/certs/server.crt
+      - KEY_FILE=/app/certs/server.key
+      - CA_FILE=/app/certs/ca.crt
+    ports:
+      - "8888:8888"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://localhost:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.25'
+    cap_drop:
+      - ALL
+    depends_on:
+      mcp-server:
+        condition: service_started
+
   test-runner:
     build:
       context: .
@@ -221,6 +257,7 @@ volumes:
   db_data:
   caddy_data:
   caddy_config:
+  mcp_logs:
 
 networks:
   default:

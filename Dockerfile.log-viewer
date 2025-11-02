@@ -1,0 +1,20 @@
+FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
+
+# Security: Run as non-root user
+RUN addgroup -g 1000 logviewer && \
+    adduser -D -u 1000 -G logviewer logviewer
+
+WORKDIR /app
+
+# Copy application
+COPY src/log_viewer.py /app/log_viewer.py
+
+# Create log directory
+RUN mkdir -p /var/log/mcp && \
+    chown -R logviewer:logviewer /var/log/mcp /app
+
+USER logviewer
+
+EXPOSE 8888
+
+CMD ["python3", "/app/log_viewer.py"]

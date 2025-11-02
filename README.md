@@ -44,6 +44,7 @@ docker compose ps
 - **MCP Server:** http://localhost:8000/mcp (streamable HTTP)
 - **OAuth Flow:** http://localhost/oauth/authorize
 - **MCP Inspector:** http://localhost:6274 (development)
+- **Log Viewer:** http://localhost:8888 (MCP server logs with mTLS)
 - **Health Check:** http://localhost/health
 
 ## MCP Remote Server
@@ -242,6 +243,33 @@ All gates must pass before deployment:
 | T1/T4 | Compose & MCP | ✅ |
 | T2/T5 | Data flow | ✅ |
 | T3 | Unit tests | ✅ |
+
+## Log Viewer
+
+The log-viewer service provides HTTP access to MCP server logs with mTLS authentication.
+
+### Quick Access (Development)
+```bash
+# View logs (no certificates required in dev mode)
+curl http://localhost:8888/logs/stream
+
+# Health check
+curl http://localhost:8888/health
+```
+
+### Production Access (with mTLS)
+```bash
+# Generate certificates
+bash scripts/generate-log-viewer-certs.sh
+
+# Access with mTLS
+curl https://localhost:8888/logs/stream \
+  --cacert certs/ca.crt \
+  --cert certs/client.crt \
+  --key certs/client.key
+```
+
+See [LOG_VIEWER_QUICKSTART.md](LOG_VIEWER_QUICKSTART.md) for complete documentation.
 
 ## Architecture
 

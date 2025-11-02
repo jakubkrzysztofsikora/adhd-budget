@@ -9,8 +9,9 @@ RUN pip install --no-cache-dir aiohttp requests cryptography PyJWT psycopg2
 # Create non-root user
 RUN adduser -D -u 1000 mcpuser
 
-# Create app directory
+# Create app and log directories
 WORKDIR /app
+RUN mkdir -p /var/log/mcp && chown mcpuser:mcpuser /var/log/mcp
 COPY --chown=mcpuser:mcpuser src/ /app/
 
 # Switch to non-root user
