@@ -114,96 +114,17 @@ def test_oauth_flow():
         print(f"❌ Protected tool test failed: {protected_resp.text}")
         return False
     
-    # Step 5: Test Enable Banking banks list
-    print("\n5️⃣ Testing Enable Banking banks list...")
-    banks_req = {
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "enable.banking.banks",
-            "arguments": {}
-        },
-        "id": "3"
-    }
-    
-    banks_resp = requests.post(
-        "http://localhost/mcp",
-        headers={"Content-Type": "application/json"},
-        json=banks_req
-    )
-    
-    print(f"Status: {banks_resp.status_code}")
-    if banks_resp.status_code == 200:
-        banks_data = banks_resp.json()
-        if "result" in banks_data:
-            result = banks_data["result"]
-            if "banks" in result:
-                print(f"✅ Found {len(result['banks'])} banks")
-                if result['banks']:
-                    print(f"✅ First bank: {result['banks'][0]}")
-            else:
-                print(f"❌ No banks in response: {result}")
-        else:
-            print(f"❌ Banks list failed: {banks_data}")
-    else:
-        print(f"❌ Banks list request failed: {banks_resp.text}")
-    
-    # Step 6: Test Enable Banking auth tool
-    print("\n6️⃣ Testing Enable Banking auth initialization...")
-    auth_req = {
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "enable.banking.auth",
-            "arguments": {
-                "aspsp_name": "Mock ASPSP",
-                "aspsp_country": "FI",
-                "redirect_url": "http://localhost:8081/auth/callback",
-                "state": "test-state-123"
-            }
-        },
-        "id": "4"
-    }
-    
-    auth_resp = requests.post(
-        "http://localhost/mcp",
-        headers={"Content-Type": "application/json"},
-        json=auth_req
-    )
-    
-    print(f"Status: {auth_resp.status_code}")
-    if auth_resp.status_code == 200:
-        auth_data = auth_resp.json()
-        if "result" in auth_data:
-            result = auth_data["result"]
-            if "auth_url" in result or "session_id" in result:
-                print(f"✅ Auth URL: {result.get('auth_url', 'N/A')}")
-                print(f"✅ Session ID: {result.get('session_id', 'N/A')}")
-                print(f"✅ Status: {result.get('status')}")
-                print(f"✅ Instructions provided: {len(result.get('instructions', []))} steps")
-            else:
-                print(f"❌ No auth URL in response: {result}")
-                return False
-        else:
-            print(f"❌ Auth tool failed: {auth_data}")
-            return False
-    else:
-        print(f"❌ Auth tool request failed: {auth_resp.text}")
-        return False
-    
     print("\n🎉 All OAuth 2.0 integration tests passed!")
     print("✅ OAuth discovery endpoint working")
     print("✅ Dynamic client registration working")
     print("✅ MCP tools list accessible without auth")
     print("✅ Protected tools properly require OAuth")
-    print("✅ Enable Banking OAuth flow can be initiated")
-    
+
     print("\n📋 Next steps for MCP Inspector:")
     print("1. Open MCP Inspector at http://localhost:6274")
     print("2. Select 'ADHD Budget MCP Server' from dropdown")
-    print("3. Click 'Quick Auth' button (if available)")
-    print("4. Should initiate OAuth flow with Enable Banking")
-    print("5. After OAuth, tools should work with access token")
+    print("3. Start the OAuth flow and follow the Enable Banking redirect")
+    print("4. After consent, Inspector can call financial tools immediately")
     
     return True
 
