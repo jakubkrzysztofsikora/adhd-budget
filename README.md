@@ -1,4 +1,4 @@
-# ADHD Budget Assistant
+# [WiP] ADHD Budget Assistant
 
 An automated financial tracking system designed for ADHD households - zero manual reconciliation required.
 
