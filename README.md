@@ -111,6 +111,24 @@ protocol versions and OAuth 2.1 configuration so that connectors such as
 ChatGPT Developer Mode and Claude Web/Desktop can configure themselves
 automatically.
 
+#### Enable Banking tools
+
+Once authenticated, clients should walk the Enable Banking consent flow so the
+financial tools can access real data:
+
+1. Call ``enable.banking.auth`` – this returns an authorization URL for the
+   configured ASPSP (``ENABLE_APP_ID`` / ``ENABLE_PRIVATE_KEY_PATH``). Open it
+   in a trusted browser and complete the bank login.
+2. Copy the ``code`` parameter from the final redirect and call
+   ``enable.banking.callback`` with that value (and ``state`` if provided).
+3. The server stores the resulting session token inside the active MCP session;
+   subsequent calls to ``summary.today``, ``projection.month``, ``search``,
+   ``fetch`` and ``transactions.query`` now fetch live Enable Banking data.
+
+If you use a custom redirect URI, either set ``ENABLE_OAUTH_REDIRECT_URL`` or
+pass ``redirect_uri`` to the ``enable.banking.auth`` tool so the consent flow
+matches your registered callback.
+
 **ChatGPT Developer Mode**
 
 1. Deploy the server behind HTTPS (e.g. ``https://mcp.example.com``).

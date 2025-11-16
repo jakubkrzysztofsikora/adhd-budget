@@ -33,20 +33,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import calendar
 import json
 import logging
 import os
 import secrets
 import textwrap
 import time
+from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import urlencode
 from uuid import uuid4
 
 from aiohttp import web
 
+from .enable_banking_service import EnableBankingService, EnableBankingTokens
 
 LOGGER = logging.getLogger("adhd_budget.mcp")
 
@@ -169,6 +173,7 @@ class Session:
     created_at: float = field(default_factory=lambda: time.time())
     queue: "asyncio.Queue[Dict[str, Any]]" = field(default_factory=asyncio.Queue)
     last_seen: float = field(default_factory=lambda: time.time())
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def heartbeat(self) -> None:
         """Update last seen timestamp."""
@@ -215,6 +220,16 @@ class SessionManager:
                 if self._sessions[session_id].last_seen < cutoff:
                     LOGGER.info("Removing expired MCP session %s", session_id)
                     self._sessions.pop(session_id, None)
+
+
+@dataclass
+class ToolDefinition:
+    """Metadata describing an MCP tool."""
+
+    handler: Callable[[Dict[str, Any], Optional[Session], web.Request], Awaitable[Dict[str, Any]]]
+    description: str
+    input_schema: Dict[str, Any]
+    protected: bool = True
 
 
 class OAuthProvider:
@@ -508,6 +523,7 @@ class MCPApplication:
     def __init__(self) -> None:
         self.sessions = SessionManager()
         self.oauth = OAuthProvider()
+        self.enable_banking = EnableBankingService.from_environment()
         self.app = web.Application(middlewares=[cors_and_origin_middleware])
         self.app.router.add_route("GET", "/mcp", self.handle_get)
         # Backwards compatibility with earlier test harnesses that used
@@ -520,16 +536,115 @@ class MCPApplication:
         self.app.router.add_get("/.well-known/mcp.json", self.mcp_manifest)
         self._register_oauth_routes()
 
-        self.tools: Dict[str, Callable[[Dict[str, Any], Optional[Session], web.Request], Awaitable[Dict[str, Any]]]] = {
-            "echo": self.tool_echo,
-            "search": self.tool_search,
-            "fetch": self.tool_fetch,
-            "summary.today": self.tool_summary_today,
-            "projection.month": self.tool_projection_month,
-            "transactions.query": self.tool_transactions_query,
+        self.tool_definitions: Dict[str, ToolDefinition] = {
+            "echo": ToolDefinition(
+                handler=self.tool_echo,
+                description="Echo a short message back to the caller (debugging tool).",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": ["string", "number", "boolean", "null"], "description": "Value to echo back."}
+                    },
+                    "additionalProperties": False,
+                },
+                protected=False,
+            ),
+            "enable.banking.auth": ToolDefinition(
+                handler=self.tool_enable_banking_auth,
+                description="Generate an Enable Banking authorization URL for the configured ASPSP.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "aspsp_name": {"type": "string", "description": "Override the default bank identifier."},
+                        "aspsp_country": {"type": "string", "description": "ISO country code for the bank."},
+                        "redirect_uri": {"type": "string", "description": "Custom redirect URI registered with Enable Banking."},
+                        "psu_type": {"type": "string", "enum": ["personal", "business"], "description": "End-user type."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "enable.banking.callback": ToolDefinition(
+                handler=self.tool_enable_banking_callback,
+                description="Complete the Enable Banking consent flow using the returned authorization code.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Authorization code (eb_session_*) returned by Enable Banking."},
+                        "state": {"type": "string", "description": "State value returned by Enable Banking."},
+                        "redirect_uri": {"type": "string", "description": "Override redirect URI when exchanging the code."},
+                    },
+                    "required": ["code"],
+                    "additionalProperties": False,
+                },
+            ),
+            "search": ToolDefinition(
+                handler=self.tool_search,
+                description="Search recent transactions across all connected accounts.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search term matched against merchant, description or reference."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum number of matches to return."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "fetch": ToolDefinition(
+                handler=self.tool_fetch,
+                description="Fetch a single transaction by its identifier.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Transaction identifier (transactionId)."},
+                    },
+                    "required": ["id"],
+                    "additionalProperties": False,
+                },
+            ),
+            "summary.today": ToolDefinition(
+                handler=self.tool_summary_today,
+                description="Summarise today's spending across connected Enable Banking accounts.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "currency": {"type": "string", "description": "Preferred ISO currency code for totals."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "projection.month": ToolDefinition(
+                handler=self.tool_projection_month,
+                description="Project end-of-month spend based on current month-to-date activity.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "budget": {"type": "number", "description": "Monthly budget used for variance calculations."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "transactions.query": ToolDefinition(
+                handler=self.tool_transactions_query,
+                description="List recent transactions with optional date filters.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "account_id": {"type": "string", "description": "Limit results to a specific account resourceId."},
+                        "since": {"type": "string", "description": "ISO date (YYYY-MM-DD) lower bound."},
+                        "until": {"type": "string", "description": "ISO date (YYYY-MM-DD) upper bound."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of transactions to return."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
         }
 
-        self.protected_tools = {"search", "fetch", "summary.today", "projection.month", "transactions.query"}
+        self.tools = {name: definition.handler for name, definition in self.tool_definitions.items()}
+        self.protected_tools = {
+            name
+            for name, definition in self.tool_definitions.items()
+            if definition.protected
+        }
 
     def _register_oauth_routes(self) -> None:
         self.app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
@@ -749,16 +864,12 @@ class MCPApplication:
 
     async def rpc_tools_list(self, params: Dict[str, Any], request: web.Request, session: Session) -> Dict[str, Any]:
         tools = []
-        for name, handler in self.tools.items():
+        for name, definition in self.tool_definitions.items():
             tools.append(
                 {
                     "name": name,
-                    "description": handler.__doc__ or "",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
+                    "description": definition.description,
+                    "inputSchema": definition.input_schema,
                 }
             )
         return {"tools": tools}
@@ -783,34 +894,213 @@ class MCPApplication:
         handler = self.tools[name]
         return await handler(arguments, session, request)
 
+    def _ensure_enable_banking(self) -> EnableBankingService:
+        if not self.enable_banking or not self.enable_banking.is_configured:
+            raise web.HTTPServiceUnavailable(
+                text=(
+                    "Enable Banking credentials are not configured. Set ENABLE_APP_ID "
+                    "and ENABLE_PRIVATE_KEY_PATH in the server environment."
+                )
+            )
+        return self.enable_banking
+
+    def _get_enable_banking_tokens(self, session: Session) -> EnableBankingTokens:
+        payload = session.metadata.get("enable_banking_tokens")
+        if not payload:
+            raise web.HTTPBadRequest(
+                text="No bank session is active. Run enable.banking.auth and enable.banking.callback first."
+            )
+        return EnableBankingTokens.from_dict(payload)
+
+    def _store_enable_banking_tokens(self, session: Session, tokens: EnableBankingTokens) -> None:
+        session.metadata["enable_banking_tokens"] = tokens.to_dict()
+
+    def _record_auth_state(self, session: Session, state: str, redirect_uri: str) -> None:
+        store = session.metadata.setdefault("enable_banking_states", {})
+        store[state] = {"redirect_uri": redirect_uri, "created_at": time.time()}
+
+    def _consume_auth_state(self, session: Session, state: Optional[str]) -> Optional[str]:
+        store = session.metadata.get("enable_banking_states") or {}
+        now = time.time()
+        expired = [key for key, value in store.items() if now - value.get("created_at", 0) > 600]
+        for key in expired:
+            store.pop(key, None)
+        if state and state in store:
+            entry = store.pop(state)
+            return entry.get("redirect_uri")
+        return None
+
+    def _resolve_redirect_uri(self, request: web.Request, override: Optional[str]) -> str:
+        if override:
+            return override
+        if self.enable_banking and self.enable_banking.redirect_uri:
+            return self.enable_banking.redirect_uri
+        raise web.HTTPBadRequest(
+            text="Missing redirect_uri. Provide one explicitly or set ENABLE_OAUTH_REDIRECT_URL."
+        )
+
+    async def _collect_transactions(
+        self,
+        session: Session,
+        *,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: Optional[int] = None,
+        account_id: Optional[str] = None,
+    ) -> list[Dict[str, Any]]:
+        service = self._ensure_enable_banking()
+        tokens = self._get_enable_banking_tokens(session)
+        account_ids = [account_id] if account_id else None
+        transactions, tokens = await service.fetch_transactions(
+            tokens,
+            account_ids=account_ids,
+            date_from=since,
+            date_to=until,
+            limit=limit,
+        )
+        self._store_enable_banking_tokens(session, tokens)
+        return transactions
+
+    @staticmethod
+    def _normalise_transaction(record: Dict[str, Any]) -> Dict[str, Any]:
+        amount_info = record.get("transactionAmount") or {}
+        raw_amount = amount_info.get("amount")
+        try:
+            amount = float(raw_amount) if raw_amount is not None else 0.0
+        except (TypeError, ValueError):
+            amount = 0.0
+        indicator = (record.get("creditDebitIndicator") or "").upper()
+        if indicator == "DBIT" and amount > 0:
+            signed_amount = -abs(amount)
+        elif indicator == "CRDT" and amount < 0:
+            signed_amount = abs(amount)
+        else:
+            signed_amount = amount
+        merchant = record.get("creditorName") or record.get("debtorName") or "Unknown"
+        description = record.get("remittanceInformationUnstructured") or record.get("remittanceInformationStructured")
+        reference = record.get("endToEndId") or record.get("transactionId")
+        return {
+            "id": record.get("transactionId") or record.get("internalId"),
+            "date": record.get("bookingDate") or record.get("valueDate"),
+            "valueDate": record.get("valueDate"),
+            "amount": signed_amount,
+            "currency": amount_info.get("currency"),
+            "merchant": merchant,
+            "description": description,
+            "reference": reference,
+            "raw": record,
+        }
+
+    @staticmethod
+    def _categorise_transaction(merchant: str) -> str:
+        if not merchant:
+            return "other"
+        value = merchant.lower()
+        if any(keyword in value for keyword in ("tesco", "aldi", "lidl", "asda", "market", "grocery")):
+            return "groceries"
+        if any(keyword in value for keyword in ("uber", "bolt", "tfl", "transport", "train", "bus")):
+            return "transport"
+        if any(keyword in value for keyword in ("coffee", "cafe", "restaurant", "pizza", "bar")):
+            return "eating_out"
+        return "other"
+
     async def tool_echo(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Echoes the provided message back to the caller."""
 
         message = arguments.get("message", "")
         return {"content": [{"type": "text", "text": str(message)}]}
 
+    async def tool_enable_banking_auth(
+        self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request
+    ) -> Dict[str, Any]:
+        """Start the Enable Banking consent flow for the configured ASPSP."""
+
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        service = self._ensure_enable_banking()
+        redirect_uri = self._resolve_redirect_uri(request, arguments.get("redirect_uri"))
+        state = arguments.get("state") or secrets.token_urlsafe(24)
+        aspsp_name = arguments.get("aspsp_name")
+        aspsp_country = arguments.get("aspsp_country")
+        psu_type = arguments.get("psu_type", "personal")
+        payload = await service.initiate_auth(
+            redirect_url=redirect_uri,
+            state=state,
+            aspsp_name=aspsp_name,
+            aspsp_country=aspsp_country,
+            psu_type=psu_type,
+        )
+        self._record_auth_state(session, state, redirect_uri)
+        auth_url = payload.get("url")
+        return {
+            "authorization_url": auth_url,
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "valid_until": payload.get("access", {}).get("valid_until"),
+            "instructions": [
+                "Open authorization_url in a secure browser",
+                "Complete your bank's login and grant consent",
+                "Copy the 'code' parameter from the final redirect",
+                "Call enable.banking.callback with that code",
+            ],
+        }
+
+    async def tool_enable_banking_callback(
+        self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request
+    ) -> Dict[str, Any]:
+        """Exchange an Enable Banking authorization code for API tokens."""
+
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        service = self._ensure_enable_banking()
+        code = arguments.get("code")
+        if not code:
+            raise web.HTTPBadRequest(text="Missing code argument")
+        state = arguments.get("state")
+        stored_redirect = self._consume_auth_state(session, state)
+        redirect_uri = self._resolve_redirect_uri(request, arguments.get("redirect_uri") or stored_redirect)
+        tokens, raw = await service.exchange_code(code, redirect_uri)
+        self._store_enable_banking_tokens(session, tokens)
+        return {
+            "status": "connected",
+            "access_token": EnableBankingService.mask_token(tokens.access_token),
+            "refresh_token_available": bool(tokens.refresh_token),
+            "expires_in": raw.get("expires_in"),
+            "message": "Enable Banking connected. You can now call summary.today, projection.month and transactions.query.",
+        }
+
     async def tool_search(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Search recent transactions by free text (requires OAuth token)."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
         query = (arguments.get("query") or "").lower()
-        results = []
-        sample = [
-            {"id": "tx-101", "merchant": "Tesco", "amount": -42.5, "tags": ["groceries"]},
-            {"id": "tx-205", "merchant": "Starbucks", "amount": -5.8, "tags": ["coffee", "treats"]},
-            {"id": "tx-330", "merchant": "TFL", "amount": -3.2, "tags": ["transport"]},
-        ]
+        limit = int(arguments.get("limit", 25))
+        transactions = await self._collect_transactions(session, limit=200)
+        matches = []
+        for record in transactions:
+            normalised = self._normalise_transaction(record)
+            haystack = " ".join(
+                filter(
+                    None,
+                    [
+                        normalised.get("merchant"),
+                        normalised.get("description"),
+                        normalised.get("reference"),
+                    ],
+                )
+            ).lower()
+            if not query or query in haystack:
+                matches.append(normalised)
+            if len(matches) >= limit:
+                break
 
-        for entry in sample:
-            if not query or query in entry["merchant"].lower() or any(query in tag for tag in entry["tags"]):
-                results.append(entry)
+        await self.sessions.publish(
+            session.id,
+            {"type": "search", "query": query, "count": len(matches), "timestamp": time.time()},
+        )
 
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {"type": "search", "query": query, "count": len(results), "timestamp": time.time()},
-            )
-
-        return {"results": results, "query": query}
+        return {"results": matches, "query": query}
 
     async def tool_fetch(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Fetch a transaction by id (requires OAuth token)."""
@@ -818,88 +1108,134 @@ class MCPApplication:
         resource_id = arguments.get("id")
         if not resource_id:
             raise web.HTTPBadRequest(text="Missing id argument")
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
 
-        record = {
-            "id": resource_id,
-            "date": "2025-01-15T12:00:00Z",
-            "amount": -42.5,
-            "merchant": "Tesco",
-            "category": "groceries",
-            "notes": "Sample data from MCP server",
-        }
-        return {"resource": record}
+        transactions = await self._collect_transactions(session, limit=500)
+        for record in transactions:
+            normalised = self._normalise_transaction(record)
+            if str(normalised.get("id")) == str(resource_id):
+                return {"resource": normalised}
+
+        raise web.HTTPNotFound(text="Transaction not found")
 
     async def tool_summary_today(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
-        """Return a mock summary of today's spending (requires OAuth token)."""
+        """Summarise today's spending using Enable Banking transactions."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        today = datetime.now(timezone.utc).date().isoformat()
+        transactions = await self._collect_transactions(session, since=today, until=today)
+        normalised = [self._normalise_transaction(record) for record in transactions]
+        categories: Dict[str, float] = defaultdict(float)
+        total_spent = 0.0
+        expense_count = 0
+        for txn in normalised:
+            indicator = (txn["raw"].get("creditDebitIndicator") or "").upper()
+            if indicator == "CRDT":
+                continue
+            amount = abs(txn.get("amount") or 0.0)
+            if amount == 0:
+                continue
+            total_spent += amount
+            expense_count += 1
+            categories[self._categorise_transaction(txn.get("merchant", ""))] += amount
+
+        budget = float(arguments.get("budget", 120.0))
+        variance = total_spent - budget
         return {
             "summary": {
-                "date": time.strftime("%Y-%m-%d"),
-                "total_spent": 132.48,
-                "categories": {"groceries": 54.12, "transport": 28.5, "eating_out": 36.42, "other": 13.44},
-                "daily_budget": 120.0,
-                "variance": 12.48,
-                "status": "over",
+                "date": today,
+                "transactions": expense_count,
+                "total_spent": round(total_spent, 2),
+                "categories": {k: round(v, 2) for k, v in categories.items()},
+                "daily_budget": budget,
+                "variance": round(variance, 2),
+                "status": "over" if variance > 0 else "under",
             }
         }
 
     async def tool_projection_month(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
-        """Return a projection for the current month (requires OAuth token)."""
+        """Return a projection for the current month based on live data."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        now = datetime.now(timezone.utc)
+        month = now.strftime("%Y-%m")
+        month_start = now.replace(day=1).date().isoformat()
+        transactions = await self._collect_transactions(session, since=month_start)
+        normalised = [self._normalise_transaction(record) for record in transactions]
+        monthly_spend = 0.0
+        for txn in normalised:
+            indicator = (txn["raw"].get("creditDebitIndicator") or "").upper()
+            if indicator == "CRDT":
+                continue
+            monthly_spend += abs(txn.get("amount") or 0.0)
+        days_in_month = calendar.monthrange(now.year, now.month)[1]
+        days_elapsed = max(1, now.day)
+        projected = (monthly_spend / days_elapsed) * days_in_month
+        budget = float(arguments.get("budget", 3500.0))
+        variance = projected - budget
         return {
             "projection": {
-                "month": time.strftime("%Y-%m"),
-                "projected_spend": 3845.32,
-                "budget": 3600.0,
-                "variance": 245.32,
-                "pace": "over",
-                "month_end_balance": -245.32,
+                "month": month,
+                "current_spend": round(monthly_spend, 2),
+                "projected_spend": round(projected, 2),
+                "budget": budget,
+                "variance": round(variance, 2),
+                "pace": "over" if variance > 0 else "under",
+                "days_remaining": days_in_month - days_elapsed,
             }
         }
 
     async def tool_transactions_query(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Query recent transactions and stream progress updates (requires OAuth token)."""
 
-        since = arguments.get("since", "2025-01-01T00:00:00Z")
-        limit = int(arguments.get("limit", 5))
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        since = arguments.get("since")
+        until = arguments.get("until")
+        limit = int(arguments.get("limit", 50))
+        account_id = arguments.get("account_id")
 
-        # Demonstrate streaming progress over SSE.
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {
-                    "event": "progress",
-                    "type": "progress",
-                    "message": "Fetching transactions",
-                    "timestamp": time.time(),
-                },
-            )
-
-        await asyncio.sleep(0.1)
-
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {
-                    "event": "progress",
-                    "type": "progress",
-                    "message": "Normalising results",
-                    "timestamp": time.time(),
-                },
-            )
-
-        transactions = [
+        await self.sessions.publish(
+            session.id,
             {
-                "id": f"tx-{index:03d}",
-                "date": "2025-01-15T12:00:00Z",
-                "amount": (-1) ** index * 42.5,
-                "merchant": "Sample Merchant",
-                "category": "misc",
-            }
-            for index in range(1, limit + 1)
-        ]
+                "event": "progress",
+                "type": "progress",
+                "message": "Fetching transactions",
+                "timestamp": time.time(),
+            },
+        )
 
-        return {"transactions": transactions, "since": since, "limit": limit}
+        transactions = await self._collect_transactions(
+            session,
+            since=since,
+            until=until,
+            limit=limit,
+            account_id=account_id,
+        )
+
+        await self.sessions.publish(
+            session.id,
+            {
+                "event": "progress",
+                "type": "progress",
+                "message": "Normalising results",
+                "timestamp": time.time(),
+            },
+        )
+
+        normalised = [self._normalise_transaction(record) for record in transactions]
+
+        return {
+            "transactions": normalised,
+            "count": len(normalised),
+            "since": since,
+            "until": until,
+            "limit": limit,
+            "account_id": account_id,
+        }
 
     async def oauth_metadata(self, request: web.Request) -> web.Response:
         base_url = _external_base_url(request)
