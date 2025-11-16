@@ -11,6 +11,9 @@ from src.enable_banking_service import EnableBankingService, EnableBankingTokens
 
 
 class DummyClient:
+    rotate_on_fetch = False
+    rotate_on_transactions = False
+
     def __init__(self, *_, **__):
         self.access_token = None
         self.refresh_token = None
@@ -24,9 +27,15 @@ class DummyClient:
         ]
 
     def get_accounts(self) -> List[dict]:
+        if self.rotate_on_fetch:
+            self.access_token = "rotated-access"
+            self.refresh_token = "rotated-refresh"
         return self._accounts
 
     def get_transactions(self, *_args, **_kwargs) -> List[dict]:
+        if self.rotate_on_transactions:
+            self.access_token = "rotated-access"
+            self.refresh_token = "rotated-refresh"
         return self._transactions
 
     def refresh_access_token(self) -> dict:
@@ -66,3 +75,34 @@ async def test_fetch_transactions_handles_limit():
     transactions, _ = await service.fetch_transactions(EnableBankingTokens(access_token="foo"), limit=1)
     assert len(transactions) == 1
     assert transactions[0]["transactionId"] == "tx-1"
+
+
+@pytest.mark.asyncio
+async def test_client_refresh_during_fetch_accounts_is_persisted():
+    DummyClient.rotate_on_fetch = True
+    service = EnableBankingService.from_environment()
+    try:
+        _, tokens = await service.fetch_accounts(
+            EnableBankingTokens(access_token="foo", refresh_token="bar")
+        )
+    finally:
+        DummyClient.rotate_on_fetch = False
+
+    assert tokens.access_token == "rotated-access"
+    assert tokens.refresh_token == "rotated-refresh"
+
+
+@pytest.mark.asyncio
+async def test_client_refresh_during_transactions_is_persisted():
+    DummyClient.rotate_on_transactions = True
+    service = EnableBankingService.from_environment()
+    try:
+        _, tokens = await service.fetch_transactions(
+            EnableBankingTokens(access_token="foo", refresh_token="bar"),
+            account_ids=["acc-1"],
+        )
+    finally:
+        DummyClient.rotate_on_transactions = False
+
+    assert tokens.access_token == "rotated-access"
+    assert tokens.refresh_token == "rotated-refresh"

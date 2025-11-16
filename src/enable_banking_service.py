@@ -159,6 +159,7 @@ class EnableBankingService:
         except requests.RequestException as exc:  # pragma: no cover - network failure
             LOGGER.error("Enable Banking accounts call failed: %s", exc)
             raise RuntimeError("Failed to fetch Enable Banking accounts") from exc
+        tokens = self._sync_tokens_from_client(client, tokens)
         return accounts, tokens
 
     async def fetch_transactions(
@@ -193,9 +194,22 @@ class EnableBankingService:
                 LOGGER.error("Enable Banking transactions call failed: %s", exc)
                 raise RuntimeError("Failed to fetch Enable Banking transactions") from exc
             collected.extend(data)
+            tokens = self._sync_tokens_from_client(client, tokens)
             if limit and len(collected) >= limit:
                 return collected[:limit], tokens
         return collected, tokens
+
+    @staticmethod
+    def _sync_tokens_from_client(
+        client: EnableBankingClient, tokens: EnableBankingTokens
+    ) -> EnableBankingTokens:
+        """Ensure refreshed client credentials are persisted in the session tokens."""
+
+        if client.access_token and client.access_token != tokens.access_token:
+            tokens.access_token = client.access_token
+        if client.refresh_token and client.refresh_token != tokens.refresh_token:
+            tokens.refresh_token = client.refresh_token
+        return tokens
 
     @staticmethod
     def mask_token(token: str) -> str:
