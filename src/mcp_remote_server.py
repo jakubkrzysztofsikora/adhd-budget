@@ -31,6 +31,8 @@ durable database.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -125,6 +127,36 @@ def _json_dumps(payload: Dict[str, Any]) -> bytes:
     """Serialize a JSON payload using compact separators."""
 
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _apply_basic_auth_credentials(
+    payload: Dict[str, Any], headers: Dict[str, str]
+) -> Dict[str, Any]:
+    """Merge client credentials provided via HTTP Basic auth into the payload."""
+
+    authorization = headers.get("Authorization")
+    if not authorization or not authorization.startswith("Basic "):
+        return payload
+
+    encoded = authorization.split(" ", 1)[1].strip()
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        raise web.HTTPUnauthorized(text="Invalid client authentication")
+
+    if ":" not in decoded:
+        raise web.HTTPUnauthorized(text="Invalid client authentication")
+
+    basic_client_id, basic_client_secret = decoded.split(":", 1)
+    if payload.get("client_id") and payload["client_id"] != basic_client_id:
+        raise web.HTTPUnauthorized(text="Client mismatch")
+
+    if "client_id" not in payload:
+        payload["client_id"] = basic_client_id
+    if not payload.get("client_secret"):
+        payload["client_secret"] = basic_client_secret
+
+    return payload
 
 
 @dataclass
@@ -239,10 +271,20 @@ class OAuthProvider:
         self.clients[client_id] = client
         return client
 
-    def _validate_client(self, client_id: str, client_secret: Optional[str]) -> Dict[str, Any]:
+    def _validate_client(
+        self,
+        client_id: str,
+        client_secret: Optional[str],
+        *,
+        require_secret: bool = False,
+    ) -> Dict[str, Any]:
         client = self.clients.get(client_id)
         if not client:
             raise web.HTTPUnauthorized(text="Unknown client")
+        token_auth_method = client.get("token_endpoint_auth_method")
+        expects_secret = token_auth_method is None or token_auth_method != "none"
+        if require_secret and expects_secret and not client_secret:
+            raise web.HTTPUnauthorized(text="Invalid client secret")
         if client_secret and client_secret != client["client_secret"]:
             raise web.HTTPUnauthorized(text="Invalid client secret")
         return client
@@ -296,7 +338,11 @@ class OAuthProvider:
 
         client = None
         if client_id and client_id in self.clients:
-            client = self._validate_client(client_id, client_secret)
+            client = self._validate_client(
+                client_id,
+                client_secret,
+                require_secret=True,
+            )
         elif os.getenv("ENABLE_ENV", "sandbox") != "production":
             client_id = client_id or os.getenv("ENABLE_APP_ID", "enable-sandbox")
             redirect_candidates: list[str] = []
@@ -985,6 +1031,7 @@ class MCPApplication:
         else:
             form = await request.post()
             payload = dict(form)
+        payload = _apply_basic_auth_credentials(dict(payload), request.headers)
         tokens = self.oauth.exchange_token(payload)
         return web.json_response(tokens)
 
