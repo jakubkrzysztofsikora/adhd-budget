@@ -66,7 +66,10 @@ You should receive live Enable Banking data without any intermediate auth tools.
 To exercise the fully automated flow in `tests/e2e/test_enable_banking_oauth_complete.py`:
 
 1. Ensure a remote MCP deployment is reachable and export `TEST_BASE_URL` (or
-   `E2E_BASE_URL`) with its origin, e.g. `https://adhdbudget.bieda.it`.
+   `E2E_BASE_URL`) with its origin, e.g. `https://adhdbudget.bieda.it`. The
+   automated suite now probes both `/health` **and**
+   `/.well-known/oauth-authorization-server`; if either returns 5xx, the suite
+   is skipped so CI doesn’t fail with "502 Bad Gateway" during outages.
 2. Complete a manual Enable Banking consent once and copy the resulting OAuth
    authorization code into `MCP_TEST_AUTH_CODE` (or set
    `MCP_TEST_ACCESS_TOKEN`/`MCP_TEST_REFRESH_TOKEN` if you already have valid

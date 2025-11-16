@@ -30,15 +30,22 @@ BASE_URL = _resolve_base_url()
 
 
 def _server_is_available() -> bool:
-    """Probe the remote MCP server so we can skip instead of failing with 502s."""
+    """Probe critical endpoints so we can skip instead of failing with 5xx errors."""
 
     if not BASE_URL:
         return False
-    try:
-        response = requests.get(f"{BASE_URL}/health", timeout=5)
-    except requests.RequestException:
-        return False
-    return response.status_code < 500
+
+    def _healthy(path: str) -> bool:
+        try:
+            resp = requests.get(f"{BASE_URL}{path}", timeout=5)
+        except requests.RequestException:
+            return False
+        return resp.status_code < 500
+
+    # Require both health and OAuth metadata to respond. Caddy often keeps
+    # /health up even when the upstream application is down, so also verify the
+    # metadata endpoint that the first test hits to avoid cascading 502s.
+    return _healthy("/health") and _healthy("/.well-known/oauth-authorization-server")
 
 
 pytestmark = pytest.mark.skipif(
