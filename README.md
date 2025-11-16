@@ -111,6 +111,29 @@ protocol versions and OAuth 2.1 configuration so that connectors such as
 ChatGPT Developer Mode and Claude Web/Desktop can configure themselves
 automatically.
 
+#### Enable Banking consent
+
+The OAuth handshake now performs the Enable Banking consent automatically. When
+a connector (Claude, ChatGPT, MCP Inspector, etc.) sends the user through
+``/oauth/authorize`` the server immediately redirects them to Enable Banking to
+pick their bank and grant access. Once consent succeeds the server exchanges the
+code, stores the resulting access/refresh tokens inside the OAuth grant and only
+then redirects back to the connector's callback URL.
+
+If Enable Banking credentials are not configured (no ``ENABLE_APP_ID`` /
+``ENABLE_PRIVATE_KEY_PATH``) the server still completes the OAuth 2.0 exchange so
+automated tests and non-banking tools remain usable. In that mode the issued
+tokens simply omit bank metadata and financial tools will respond with
+``401 Enable Banking authorization required`` until real credentials are
+available.
+
+As a result there are no dedicated ``enable.banking.*`` tools. When a connector
+has a valid OAuth token it already has a bank session wired up and all financial
+tools (``summary.today``, ``projection.month``, ``search``, ``fetch`` and
+``transactions.query``) can operate on live data. If the user revokes consent or
+bank access expires, have them disconnect/reconnect the connector so the OAuth
+flow can re-run the Enable Banking sign-in screen.
+
 **ChatGPT Developer Mode**
 
 1. Deploy the server behind HTTPS (e.g. ``https://mcp.example.com``).
