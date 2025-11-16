@@ -4,18 +4,28 @@ Uses Mock ASPSP for sandbox testing
 https://enablebanking.com/docs/api/sandbox/#mock-aspsp
 """
 
+from __future__ import annotations
+
 import requests
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import os
-from enable_banking_jwt import EnableBankingJWT
+from .enable_banking_jwt import EnableBankingJWT
 
 
 class EnableBankingClient:
     """Client for Enable Banking API with Mock ASPSP support"""
-    
-    def __init__(self, app_id: str = None, private_key_path: str = None, sandbox: bool = True):
+
+    def __init__(
+        self,
+        app_id: str | None = None,
+        private_key_path: str | None = None,
+        sandbox: bool = True,
+        *,
+        base_url: str | None = None,
+        jwt_generator: EnableBankingJWT | None = None,
+    ):
         """
         Initialize Enable Banking client
         
@@ -27,16 +37,14 @@ class EnableBankingClient:
         self.app_id = app_id or os.environ.get('ENABLE_APP_ID', 'sandbox-app-id')
         self.private_key_path = private_key_path or os.environ.get('ENABLE_PRIVATE_KEY_PATH')
         self.sandbox = sandbox
-        
-        # Initialize JWT generator if credentials provided
-        if self.app_id and self.private_key_path:
-            self.jwt_generator = EnableBankingJWT(self.app_id, self.private_key_path)
-        else:
-            self.jwt_generator = None
-        
-        # Enable Banking uses the same API endpoint for both production and sandbox
-        # The sandbox banks are distinguished by their names (e.g., Mock ASPSP)
-        self.base_url = "https://api.enablebanking.com"
+
+        self._jwt_generator = jwt_generator
+
+        # Enable Banking uses separate base URLs for sandbox vs production.
+        env_base = os.environ.get('ENABLE_API_BASE_URL')
+        if not env_base:
+            env_base = "https://api.sandbox.enablebanking.com" if sandbox else "https://api.enablebanking.com"
+        self.base_url = base_url or env_base
         
         if sandbox:
             self.aspsp_id = "MOCKASPSP_SANDBOX"
@@ -47,7 +55,15 @@ class EnableBankingClient:
         self.refresh_token = None
         self.consent_id = None
     
-    def initiate_auth(self, aspsp_name: str, aspsp_country: str, redirect_url: str, 
+    def _ensure_jwt(self) -> EnableBankingJWT:
+        if self._jwt_generator:
+            return self._jwt_generator
+        if not self.app_id or not self.private_key_path:
+            raise ValueError("JWT generator not initialized. Provide app_id and private_key_path")
+        self._jwt_generator = EnableBankingJWT(self.app_id, self.private_key_path)
+        return self._jwt_generator
+
+    def initiate_auth(self, aspsp_name: str, aspsp_country: str, redirect_url: str,
                      state: str = None, psu_type: str = 'personal') -> Dict[str, Any]:
         """
         Initiate Enable Banking authentication for a specific bank
@@ -65,9 +81,7 @@ class EnableBankingClient:
         from datetime import datetime, timedelta, timezone
         
         # Create JWT for API authentication
-        if not self.jwt_generator:
-            raise ValueError("JWT generator not initialized. Provide app_id and private_key_path")
-        jwt_token = self.jwt_generator.generate_token()
+        jwt_token = self._ensure_jwt().generate_token()
         
         # Prepare auth request
         valid_until = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
@@ -147,8 +161,11 @@ class EnableBankingClient:
         
         # Add JWT authentication if available
         headers = {}
-        if self.jwt_generator:
-            headers = self.jwt_generator.get_auth_header()
+        try:
+            headers = self._ensure_jwt().get_auth_header()
+        except ValueError:
+            # Allow token exchange to proceed without JWT in sandbox/testing scenarios
+            headers = {}
         
         response = requests.post(url, data=data, headers=headers)
         response.raise_for_status()
@@ -179,11 +196,11 @@ class EnableBankingClient:
         
         response = requests.post(url, data=data)
         response.raise_for_status()
-        
+
         token_data = response.json()
         self.access_token = token_data['access_token']
         self.refresh_token = token_data.get('refresh_token', self.refresh_token)
-        
+
         return token_data
     
     def get_accounts(self) -> List[Dict[str, Any]]:

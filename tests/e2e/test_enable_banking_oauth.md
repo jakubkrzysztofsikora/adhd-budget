@@ -1,199 +1,117 @@
 # Enable Banking OAuth Testing with MCP Inspector
 
 ## Overview
-Enable Banking uses OAuth 2.0 for user authentication to access bank accounts. The MCP server exposes Enable Banking tools to manage this flow.
+
+Enable Banking uses OAuth 2.0 for user authentication to access bank accounts.
+The remote MCP server now wires the Enable Banking consent directly into its
+OAuth flow – when a connector begins `/oauth/authorize` the server immediately
+redirects the browser to Enable Banking so the user can pick their bank and
+approve access. Once consent completes the server exchanges the code, stores the
+API tokens in the OAuth grant and redirects back to the connector.
 
 ## Authentication Flow
 
-1. **Start OAuth Flow** → Get authorization URL
-2. **User Authorizes** → User logs into their bank
-3. **Handle Callback** → Exchange code for access token
-4. **Sync Transactions** → Use token to fetch bank data
+1. **Connector launches `/oauth/authorize`** – MCP server validates the client.
+2. **Server redirects to Enable Banking** – user completes their bank’s login.
+3. **Enable Banking calls `/oauth/enable-banking/callback`** – server exchanges
+   the code for access/refresh tokens and issues an OAuth authorization code.
+4. **Connector exchanges the code at `/oauth/token`** – resulting access tokens
+   automatically include the Enable Banking session so financial tools can run.
 
 ## Testing in MCP Inspector
 
 ### 1. Start MCP Inspector
+
 ```bash
 ./setup_mcp_inspector.sh
 # Opens at http://localhost:6274
 ```
 
 ### 2. Connect to MCP Server
+
 - MCP server runs at: `http://localhost:8081/mcp`
-- No authentication required for local testing
-- Or use Bearer token: `test_mcp_token_secure_2024`
+- Inspector automatically discovers the manifest and OAuth endpoints
+- No manual bearer token is required; use the OAuth button inside Inspector
 
-### 3. Test Enable Banking OAuth Flow
+### 3. Walk the OAuth + Enable Banking Flow
 
-#### Step 1: Start OAuth Flow
+1. Click **Connect** → **Authorize** in MCP Inspector.
+2. A browser window opens showing the Enable Banking consent screen.
+3. Select a sandbox bank (e.g. `MOCKASPSP_SANDBOX`) and finish login.
+4. Once consent succeeds the browser is redirected back to MCP Inspector.
+5. Inspector now has a valid OAuth access token that already contains the
+   Enable Banking session; you can immediately run tools such as
+   `summary.today`, `projection.month`, `search`, `fetch`, or `transactions.query`.
+
+### 4. Verify Tool Access
+
+Use Inspector’s console to run a protected tool after OAuth:
+
 ```json
 {
   "jsonrpc": "2.0",
   "method": "tools/call",
   "params": {
-    "name": "enable.banking.auth",
-    "arguments": {
-      "redirect_uri": "http://localhost:8082/api/auth/callback",
-      "state": "test-session-123"
-    }
+    "name": "summary.today",
+    "arguments": {}
   },
   "id": "1"
 }
 ```
 
-**Expected Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "auth_url": "https://api.sandbox.enablebanking.com/auth/authorize?...",
-    "message": "Open this URL in your browser to authorize",
-    "state": "test-session-123"
-  },
-  "id": "1"
-}
-```
+You should receive live Enable Banking data without any intermediate auth tools.
 
-#### Step 2: Simulate OAuth Callback
-After user authorizes (or in sandbox, automatically), handle the callback:
+## Automated E2E Suite
 
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "enable.banking.callback",
-    "arguments": {
-      "code": "test-auth-code-abc123",
-      "state": "test-session-123",
-      "redirect_uri": "http://localhost:8082/api/auth/callback"
-    }
-  },
-  "id": "2"
-}
-```
+To exercise the fully automated flow in `tests/e2e/test_enable_banking_oauth_complete.py`:
 
-**Expected Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "status": "authenticated",
-    "access_token": "mock_access_token_12345",
-    "expires_in": 3600,
-    "message": "Successfully authenticated with Enable Banking"
-  },
-  "id": "2"
-}
-```
+1. Ensure a remote MCP deployment is reachable and export `TEST_BASE_URL` (or
+   `E2E_BASE_URL`) with its origin, e.g. `https://adhdbudget.bieda.it`. The
+   automated suite now probes both `/health` **and**
+   `/.well-known/oauth-authorization-server`; if either returns 5xx, the suite
+   is skipped so CI doesn’t fail with "502 Bad Gateway" during outages.
+2. Complete a manual Enable Banking consent once and copy the resulting OAuth
+   authorization code into `MCP_TEST_AUTH_CODE` (or set
+   `MCP_TEST_ACCESS_TOKEN`/`MCP_TEST_REFRESH_TOKEN` if you already have valid
+   tokens).
+3. Run `pytest tests/e2e/test_enable_banking_oauth_complete.py -v`.
 
-#### Step 3: Sync Bank Transactions
-Use the access token to sync transactions:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tools/call",
-  "params": {
-    "name": "enable.banking.sync",
-    "arguments": {
-      "access_token": "mock_access_token_12345"
-    }
-  },
-  "id": "3"
-}
-```
-
-**Expected Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "status": "synced",
-    "transactions_count": 5,
-    "accounts": ["GB123456789", "GB987654321"],
-    "message": "Successfully synced 5 transactions from 2 accounts",
-    "transactions": [
-      {"id": "eb-001", "amount": -45.20, "merchant": "Tesco", "date": "2024-01-15"},
-      {"id": "eb-002", "amount": -12.50, "merchant": "Costa", "date": "2024-01-15"},
-      {"id": "eb-003", "amount": -50.00, "merchant": "TfL", "date": "2024-01-14"},
-      {"id": "eb-004", "amount": 2500.00, "merchant": "Salary", "date": "2024-01-01"},
-      {"id": "eb-005", "amount": -800.00, "merchant": "Rent", "date": "2024-01-01"}
-    ]
-  },
-  "id": "3"
-}
-```
+The test suite now probes the `/health` endpoint up front and skips gracefully
+when the remote server or Enable Banking credentials are unavailable, avoiding
+the previous "502 Bad Gateway" failures.
 
 ## Production vs Sandbox
 
 ### Sandbox (Default)
-- Uses mock data and responses
-- No real bank connection required
-- Auth URL: `https://api.sandbox.enablebanking.com`
-- Test with any code/state values
+- Uses Enable Banking’s sandbox ASPSP list (`MOCKASPSP_SANDBOX`)
+- Configure `ENABLE_APP_ID`, `ENABLE_PRIVATE_KEY_PATH`, `ENABLE_ENV=sandbox`
+- OAuth redirect will point at `https://api.sandbox.enablebanking.com`
 
 ### Production
-- Requires real Enable Banking credentials
-- User must authenticate with real bank
-- Auth URL: `https://api.enablebanking.com`
-- Requires valid JWT signing with private key
+- Set `ENABLE_ENV=production` and use production credentials/certificates
+- Register the `/oauth/enable-banking/callback` URL with Enable Banking
+- Users will see their real bank’s login screen during the OAuth flow
 
 ## Security Notes
 
-1. **OAuth State Parameter**: Always validate to prevent CSRF attacks
-2. **Access Tokens**: Store securely, never log or expose
-3. **Redirect URI**: Must match registered URI in Enable Banking
-4. **JWT Authentication**: Production requires RS256 signed JWTs
+1. **OAuth State Parameter**: The MCP server maintains its own state per
+   consent and rejects expired/unknown states.
+2. **Access Tokens**: Tokens returned by `/oauth/token` already encapsulate the
+   Enable Banking session; treat them like sensitive financial credentials.
+3. **Redirect URI**: Make sure the value passed to `/oauth/authorize` matches
+   the URI registered with the MCP server during dynamic client registration.
+4. **Token Refresh**: The server refreshes Enable Banking tokens automatically
+   and keeps the refreshed values associated with the OAuth access/refresh
+   tokens, so connectors don’t need extra tooling.
 
 ## Troubleshooting
 
-### "Missing access token" Error
-Run the OAuth flow first:
-1. Call `enable.banking.auth`
-2. Call `enable.banking.callback` with code
-3. Use returned access_token in `enable.banking.sync`
-
-### "Invalid authorization code" Error
-- Ensure code hasn't expired (10 minutes validity)
-- Check redirect_uri matches exactly
-- Verify state parameter matches
-
-### Connection Issues
-```bash
-# Check MCP server is running
-docker compose ps mcp-server
-
-# Check logs
-docker compose logs -f mcp-server
-
-# Restart if needed
-docker compose restart mcp-server
-```
-
-## Full Test Script
-```javascript
-// In MCP Inspector console:
-// 1. Start auth
-await client.call('tools/call', {
-  name: 'enable.banking.auth',
-  arguments: { state: 'test-123' }
-});
-
-// 2. Handle callback (simulate)
-await client.call('tools/call', {
-  name: 'enable.banking.callback',
-  arguments: { 
-    code: 'test-code',
-    state: 'test-123'
-  }
-});
-
-// 3. Sync transactions
-await client.call('tools/call', {
-  name: 'enable.banking.sync',
-  arguments: {
-    access_token: 'mock_access_token_12345'
-  }
-});
-```
+- **OAuth loop stops at Enable Banking**: verify `ENABLE_APP_ID` and
+  `ENABLE_PRIVATE_KEY_PATH` are set and that the `/oauth/enable-banking/callback`
+  URL is registered in the Enable Banking dashboard.
+- **Connector says “No Enable Banking consent”**: disconnect/reconnect the MCP
+  connector so the OAuth flow (and thus the Enable Banking redirect) can run
+  again.
+- **Invalid redirect URI**: ensure your reverse proxy forwards
+  `X-Forwarded-Proto`/`Host` correctly so the manifest and OAuth metadata refer
+  to the public HTTPS hostname.

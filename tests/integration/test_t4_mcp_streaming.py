@@ -9,7 +9,7 @@ import os
 import socket
 import time
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -17,6 +17,38 @@ import pytest
 import requests
 
 PROTOCOL_VERSION = "2025-06-18"
+
+
+def _proxy_base_url() -> str:
+    configured = os.getenv("PROXY_URL")
+    if not configured:
+        configured = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8000"
+    return configured.rstrip("/")
+
+
+def _proxy_available() -> bool:
+    try:
+        response = requests.get(f"{_proxy_base_url()}/health", timeout=2)
+    except requests.RequestException:
+        return False
+    return response.status_code < 500
+
+
+pytestmark = pytest.mark.skipif(
+    not _proxy_available(),
+    reason="Reverse proxy / MCP server is not reachable for streaming integration tests.",
+)
+
+
+def _preissued_token() -> Optional[Dict[str, str]]:
+    access_token = os.getenv("MCP_TEST_ACCESS_TOKEN")
+    if not access_token:
+        return None
+    payload = {"access_token": access_token}
+    refresh_token = os.getenv("MCP_TEST_REFRESH_TOKEN")
+    if refresh_token:
+        payload["refresh_token"] = refresh_token
+    return payload
 
 
 class TestT4MCPStreaming:
@@ -65,6 +97,10 @@ class TestT4MCPStreaming:
     def mcp_token(self, proxy_url: str, oauth_client: Dict[str, str]) -> Dict[str, str]:
         """Obtain an OAuth bearer token that can access protected tools."""
 
+        preissued = _preissued_token()
+        if preissued:
+            return preissued
+
         params = {
             "response_type": "code",
             "client_id": oauth_client["client_id"],
@@ -79,6 +115,13 @@ class TestT4MCPStreaming:
             allow_redirects=False,
             timeout=10,
         )
+        if response.status_code == 503:
+            pytest.skip("Enable Banking is not configured – provide MCP_TEST_ACCESS_TOKEN to run streaming tests.")
+        if "enablebanking" in (response.headers.get("Location") or "").lower():
+            pytest.skip(
+                "Authorization requires interactive Enable Banking consent. "
+                "Set MCP_TEST_ACCESS_TOKEN after completing the flow manually."
+            )
         assert response.status_code in (302, 303), response.text
         location = response.headers.get("Location", "")
         parsed = urlparse(location)

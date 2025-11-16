@@ -16,14 +16,47 @@ from urllib.parse import urlencode, parse_qs, urlparse
 from src.mcp_remote_server import DEFAULT_REMOTE_REDIRECT_URIS
 
 
+def _default_base_url() -> str:
+    """Resolve the base URL once for module-level health checks."""
+
+    return (os.getenv("MCP_URL") or os.getenv("TEST_BASE_URL", "http://localhost:8081")).rstrip("/")
+
+
+def _server_is_available() -> bool:
+    """Best-effort health probe to skip tests when the MCP server isn't running."""
+
+    try:
+        response = requests.get(f"{_default_base_url()}/health", timeout=2)
+    except requests.RequestException:
+        return False
+    return response.status_code < 500
+
+
+pytestmark = pytest.mark.skipif(
+    not _server_is_available(),
+    reason="MCP server is not reachable – start the remote MCP service before running integration tests.",
+)
+
+
 class TestOAuthPKCE:
     """Test OAuth 2.0 implementation with PKCE for Claude Desktop compatibility"""
 
     def _base_url(self) -> str:
         """Resolve the base URL for the OAuth server under test."""
 
-        return os.getenv("MCP_URL") or os.getenv("TEST_BASE_URL", "http://localhost:8081")
-    
+        return _default_base_url()
+
+    @staticmethod
+    def _assert_enable_banking_redirect(response: requests.Response) -> None:
+        """Ensure the authorization step now routes through Enable Banking."""
+
+        if response.status_code == 503:
+            pytest.skip("Enable Banking credentials are not configured on the MCP server")
+        assert response.status_code == 302
+        location = response.headers.get("Location", "")
+        assert location, "Missing redirect location"
+        assert "enablebanking" in location.lower(), f"Expected Enable Banking redirect, got {location}"
+
     @pytest.fixture
     def pkce_challenge(self):
         """Generate PKCE code verifier and challenge"""
@@ -116,11 +149,7 @@ class TestOAuthPKCE:
             allow_redirects=False
         )
 
-        # Should auto-register allowed remote clients (Claude, ChatGPT) and redirect
-        assert response.status_code == 302
-        assert response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
-        assert 'code=' in response.headers['Location']
-        assert 'state=test-state-123' in response.headers['Location']
+        self._assert_enable_banking_redirect(response)
 
     def test_registered_client_receives_redirect(self, pkce_challenge):
         """Registered clients should receive a 302 redirect to their callback."""
@@ -146,8 +175,7 @@ class TestOAuthPKCE:
             allow_redirects=False,
         )
 
-        assert auth_response.status_code == 302
-        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
+        self._assert_enable_banking_redirect(auth_response)
 
     def test_token_exchange_with_pkce(self, pkce_challenge):
         """Test token endpoint with PKCE code verifier"""
@@ -328,13 +356,12 @@ class TestOAuthPKCE:
             params=auth_params,
             allow_redirects=False
         )
-        
-        assert auth_response.status_code == 302
-        assert auth_response.headers['Location'].startswith('https://claude.ai/api/mcp/auth_callback')
-        
+
+        self._assert_enable_banking_redirect(auth_response)
+
         # Step 3: Token exchange with PKCE verifier
         # (In real flow, code comes from callback after bank auth)
-        mock_code = 'eb_session_claude_789'
+        mock_code = os.getenv("MCP_TEST_AUTH_CODE", 'eb_session_claude_789')
 
         token_response = requests.post(
             f"{base_url}/oauth/token",
@@ -394,8 +421,7 @@ class TestOAuthPKCE:
             allow_redirects=False,
         )
 
-        assert auth_response.status_code == 302
-        assert auth_response.headers['Location'].startswith('https://chat.openai.com/')
+        self._assert_enable_banking_redirect(auth_response)
 
 
 if __name__ == "__main__":
