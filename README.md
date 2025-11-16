@@ -111,23 +111,21 @@ protocol versions and OAuth 2.1 configuration so that connectors such as
 ChatGPT Developer Mode and Claude Web/Desktop can configure themselves
 automatically.
 
-#### Enable Banking tools
+#### Enable Banking consent
 
-Once authenticated, clients should walk the Enable Banking consent flow so the
-financial tools can access real data:
+The OAuth handshake now performs the Enable Banking consent automatically. When
+a connector (Claude, ChatGPT, MCP Inspector, etc.) sends the user through
+``/oauth/authorize`` the server immediately redirects them to Enable Banking to
+pick their bank and grant access. Once consent succeeds the server exchanges the
+code, stores the resulting access/refresh tokens inside the OAuth grant and only
+then redirects back to the connector's callback URL.
 
-1. Call ``enable.banking.auth`` – this returns an authorization URL for the
-   configured ASPSP (``ENABLE_APP_ID`` / ``ENABLE_PRIVATE_KEY_PATH``). Open it
-   in a trusted browser and complete the bank login.
-2. Copy the ``code`` parameter from the final redirect and call
-   ``enable.banking.callback`` with that value (and ``state`` if provided).
-3. The server stores the resulting session token inside the active MCP session;
-   subsequent calls to ``summary.today``, ``projection.month``, ``search``,
-   ``fetch`` and ``transactions.query`` now fetch live Enable Banking data.
-
-If you use a custom redirect URI, either set ``ENABLE_OAUTH_REDIRECT_URL`` or
-pass ``redirect_uri`` to the ``enable.banking.auth`` tool so the consent flow
-matches your registered callback.
+As a result there are no dedicated ``enable.banking.*`` tools. When a connector
+has a valid OAuth token it already has a bank session wired up and all financial
+tools (``summary.today``, ``projection.month``, ``search``, ``fetch`` and
+``transactions.query``) can operate on live data. If the user revokes consent or
+bank access expires, have them disconnect/reconnect the connector so the OAuth
+flow can re-run the Enable Banking sign-in screen.
 
 **ChatGPT Developer Mode**
 

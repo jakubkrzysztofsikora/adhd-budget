@@ -311,6 +311,8 @@ class OAuthProvider:
         scope: str,
         state: Optional[str],
         resource: Optional[str],
+        *,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
@@ -329,6 +331,7 @@ class OAuthProvider:
             "state": state,
             "resource": resource,
             "expires_at": time.time() + 300,
+            "extra": extra or {},
         }
         return code
 
@@ -403,15 +406,18 @@ class OAuthProvider:
                 resource = payload.get("resource") or stored.get("resource")
                 self._validate_resource(resource, stored.get("resource"))
                 scope = stored["scope"]
+                extra = stored.get("extra")
             else:
                 scope = payload.get("scope") or client.get("scope", "transactions accounts")
                 resource = payload.get("resource")
+                extra = None
 
-            return self._issue_tokens(client_id, scope, resource)
+            return self._issue_tokens(client_id, scope, resource, extra=extra)
 
         if grant_type == "refresh_token":
             refresh_token = payload.get("refresh_token")
             token_info = self.refresh_tokens.get(refresh_token)
+            extra = None
             if token_info:
                 if token_info["client_id"] != client_id:
                     raise web.HTTPBadRequest(text="Client mismatch")
@@ -421,11 +427,12 @@ class OAuthProvider:
                 resource = payload.get("resource") or token_info.get("resource")
                 self._validate_resource(resource, token_info.get("resource"))
                 scope = token_info["scope"]
+                extra = token_info.get("extra")
             else:
                 scope = payload.get("scope") or client.get("scope", "transactions accounts")
                 resource = payload.get("resource")
 
-            return self._issue_tokens(client_id, scope, resource)
+            return self._issue_tokens(client_id, scope, resource, extra=extra)
 
         raise web.HTTPBadRequest(text="Unsupported grant_type")
 
@@ -458,23 +465,35 @@ class OAuthProvider:
 
         raise web.HTTPUnauthorized(text="Invalid bearer token")
 
-    def _issue_tokens(self, client_id: str, scope: str, resource: Optional[str]) -> Dict[str, Any]:
+    def _issue_tokens(
+        self,
+        client_id: str,
+        scope: str,
+        resource: Optional[str],
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         access_token = secrets.token_urlsafe(32)
         refresh_token = secrets.token_urlsafe(32)
         expires_in = 3600
         now = time.time()
+        extra_payload = extra or {}
         token_info = {
             "client_id": client_id,
             "scope": scope,
             "resource": resource,
             "issued_at": now,
             "expires_at": now + expires_in,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "extra": extra_payload,
         }
         self.access_tokens[access_token] = token_info
         self.refresh_tokens[refresh_token] = {
             **token_info,
             "refresh_token": refresh_token,
             "expires_at": now + 7 * 86400,
+            "extra": extra_payload,
         }
         return {
             "access_token": access_token,
@@ -484,6 +503,15 @@ class OAuthProvider:
             "scope": scope,
             "resource": resource,
         }
+
+    def update_token_extra(self, access_token: str, extra: Dict[str, Any]) -> None:
+        token_info = self.access_tokens.get(access_token)
+        if not token_info:
+            return
+        token_info["extra"] = extra
+        refresh_token = token_info.get("refresh_token")
+        if refresh_token and refresh_token in self.refresh_tokens:
+            self.refresh_tokens[refresh_token]["extra"] = extra
 
 
 def apply_cors_headers(response: web.StreamResponse, origin: Optional[str]) -> None:
@@ -524,6 +552,7 @@ class MCPApplication:
         self.sessions = SessionManager()
         self.oauth = OAuthProvider()
         self.enable_banking = EnableBankingService.from_environment()
+        self.pending_enable_banking: Dict[str, Dict[str, Any]] = {}
         self.app = web.Application(middlewares=[cors_and_origin_middleware])
         self.app.router.add_route("GET", "/mcp", self.handle_get)
         # Backwards compatibility with earlier test harnesses that used
@@ -548,34 +577,6 @@ class MCPApplication:
                     "additionalProperties": False,
                 },
                 protected=False,
-            ),
-            "enable.banking.auth": ToolDefinition(
-                handler=self.tool_enable_banking_auth,
-                description="Generate an Enable Banking authorization URL for the configured ASPSP.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "aspsp_name": {"type": "string", "description": "Override the default bank identifier."},
-                        "aspsp_country": {"type": "string", "description": "ISO country code for the bank."},
-                        "redirect_uri": {"type": "string", "description": "Custom redirect URI registered with Enable Banking."},
-                        "psu_type": {"type": "string", "enum": ["personal", "business"], "description": "End-user type."},
-                    },
-                    "additionalProperties": False,
-                },
-            ),
-            "enable.banking.callback": ToolDefinition(
-                handler=self.tool_enable_banking_callback,
-                description="Complete the Enable Banking consent flow using the returned authorization code.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "code": {"type": "string", "description": "Authorization code (eb_session_*) returned by Enable Banking."},
-                        "state": {"type": "string", "description": "State value returned by Enable Banking."},
-                        "redirect_uri": {"type": "string", "description": "Override redirect URI when exchanging the code."},
-                    },
-                    "required": ["code"],
-                    "additionalProperties": False,
-                },
             ),
             "search": ToolDefinition(
                 handler=self.tool_search,
@@ -651,6 +652,7 @@ class MCPApplication:
         self.app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource)
         self.app.router.add_post("/oauth/register", self.oauth_register)
         self.app.router.add_get("/oauth/authorize", self.oauth_authorize)
+        self.app.router.add_get("/oauth/enable-banking/callback", self.oauth_enable_banking_callback)
         self.app.router.add_post("/oauth/token", self.oauth_token)
         self.app.router.add_post("/oauth/revoke", self.oauth_revoke)
 
@@ -885,11 +887,14 @@ class MCPApplication:
             raise web.HTTPBadRequest(text=f"Unknown tool: {name}")
 
         token = None
+        token_info: Optional[Dict[str, Any]] = None
         if name in self.protected_tools:
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 token = auth_header.split(" ", 1)[1]
-            self.oauth.validate_bearer(token)
+            token_info = self.oauth.validate_bearer(token)
+            request["oauth_token_info"] = token_info
+            request["oauth_access_token"] = token
 
         handler = self.tools[name]
         return await handler(arguments, session, request)
@@ -904,44 +909,31 @@ class MCPApplication:
             )
         return self.enable_banking
 
-    def _get_enable_banking_tokens(self, session: Session) -> EnableBankingTokens:
-        payload = session.metadata.get("enable_banking_tokens")
+    def _get_enable_banking_tokens(self, request: web.Request) -> EnableBankingTokens:
+        token_info = request.get("oauth_token_info")
+        if not token_info:
+            raise web.HTTPUnauthorized(text="Enable Banking authorization required. Reconnect the MCP connector.")
+        extra = token_info.get("extra") or {}
+        payload = extra.get("enable_banking_tokens")
         if not payload:
-            raise web.HTTPBadRequest(
-                text="No bank session is active. Run enable.banking.auth and enable.banking.callback first."
-            )
+            raise web.HTTPUnauthorized(text="No Enable Banking consent found. Re-run the OAuth connection flow.")
         return EnableBankingTokens.from_dict(payload)
 
-    def _store_enable_banking_tokens(self, session: Session, tokens: EnableBankingTokens) -> None:
-        session.metadata["enable_banking_tokens"] = tokens.to_dict()
-
-    def _record_auth_state(self, session: Session, state: str, redirect_uri: str) -> None:
-        store = session.metadata.setdefault("enable_banking_states", {})
-        store[state] = {"redirect_uri": redirect_uri, "created_at": time.time()}
-
-    def _consume_auth_state(self, session: Session, state: Optional[str]) -> Optional[str]:
-        store = session.metadata.get("enable_banking_states") or {}
-        now = time.time()
-        expired = [key for key, value in store.items() if now - value.get("created_at", 0) > 600]
-        for key in expired:
-            store.pop(key, None)
-        if state and state in store:
-            entry = store.pop(state)
-            return entry.get("redirect_uri")
-        return None
-
-    def _resolve_redirect_uri(self, request: web.Request, override: Optional[str]) -> str:
-        if override:
-            return override
-        if self.enable_banking and self.enable_banking.redirect_uri:
-            return self.enable_banking.redirect_uri
-        raise web.HTTPBadRequest(
-            text="Missing redirect_uri. Provide one explicitly or set ENABLE_OAUTH_REDIRECT_URL."
-        )
+    def _update_enable_banking_tokens(self, request: web.Request, tokens: EnableBankingTokens) -> None:
+        token_info = request.get("oauth_token_info") or {}
+        extra = dict(token_info.get("extra") or {})
+        extra["enable_banking_tokens"] = tokens.to_dict()
+        access_token = request.get("oauth_access_token")
+        if access_token:
+            self.oauth.update_token_extra(access_token, extra)
+        if token_info is not None:
+            token_info.setdefault("extra", {})
+            token_info["extra"].update(extra)
 
     async def _collect_transactions(
         self,
         session: Session,
+        request: web.Request,
         *,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -949,7 +941,7 @@ class MCPApplication:
         account_id: Optional[str] = None,
     ) -> list[Dict[str, Any]]:
         service = self._ensure_enable_banking()
-        tokens = self._get_enable_banking_tokens(session)
+        tokens = self._get_enable_banking_tokens(request)
         account_ids = [account_id] if account_id else None
         transactions, tokens = await service.fetch_transactions(
             tokens,
@@ -958,7 +950,7 @@ class MCPApplication:
             date_to=until,
             limit=limit,
         )
-        self._store_enable_banking_tokens(session, tokens)
+        self._update_enable_banking_tokens(request, tokens)
         return transactions
 
     @staticmethod
@@ -1010,65 +1002,6 @@ class MCPApplication:
         message = arguments.get("message", "")
         return {"content": [{"type": "text", "text": str(message)}]}
 
-    async def tool_enable_banking_auth(
-        self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request
-    ) -> Dict[str, Any]:
-        """Start the Enable Banking consent flow for the configured ASPSP."""
-
-        if not session:
-            raise web.HTTPBadRequest(text="Session required")
-        service = self._ensure_enable_banking()
-        redirect_uri = self._resolve_redirect_uri(request, arguments.get("redirect_uri"))
-        state = arguments.get("state") or secrets.token_urlsafe(24)
-        aspsp_name = arguments.get("aspsp_name")
-        aspsp_country = arguments.get("aspsp_country")
-        psu_type = arguments.get("psu_type", "personal")
-        payload = await service.initiate_auth(
-            redirect_url=redirect_uri,
-            state=state,
-            aspsp_name=aspsp_name,
-            aspsp_country=aspsp_country,
-            psu_type=psu_type,
-        )
-        self._record_auth_state(session, state, redirect_uri)
-        auth_url = payload.get("url")
-        return {
-            "authorization_url": auth_url,
-            "state": state,
-            "redirect_uri": redirect_uri,
-            "valid_until": payload.get("access", {}).get("valid_until"),
-            "instructions": [
-                "Open authorization_url in a secure browser",
-                "Complete your bank's login and grant consent",
-                "Copy the 'code' parameter from the final redirect",
-                "Call enable.banking.callback with that code",
-            ],
-        }
-
-    async def tool_enable_banking_callback(
-        self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request
-    ) -> Dict[str, Any]:
-        """Exchange an Enable Banking authorization code for API tokens."""
-
-        if not session:
-            raise web.HTTPBadRequest(text="Session required")
-        service = self._ensure_enable_banking()
-        code = arguments.get("code")
-        if not code:
-            raise web.HTTPBadRequest(text="Missing code argument")
-        state = arguments.get("state")
-        stored_redirect = self._consume_auth_state(session, state)
-        redirect_uri = self._resolve_redirect_uri(request, arguments.get("redirect_uri") or stored_redirect)
-        tokens, raw = await service.exchange_code(code, redirect_uri)
-        self._store_enable_banking_tokens(session, tokens)
-        return {
-            "status": "connected",
-            "access_token": EnableBankingService.mask_token(tokens.access_token),
-            "refresh_token_available": bool(tokens.refresh_token),
-            "expires_in": raw.get("expires_in"),
-            "message": "Enable Banking connected. You can now call summary.today, projection.month and transactions.query.",
-        }
-
     async def tool_search(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Search recent transactions by free text (requires OAuth token)."""
 
@@ -1076,7 +1009,7 @@ class MCPApplication:
             raise web.HTTPBadRequest(text="Session required")
         query = (arguments.get("query") or "").lower()
         limit = int(arguments.get("limit", 25))
-        transactions = await self._collect_transactions(session, limit=200)
+        transactions = await self._collect_transactions(session, request, limit=200)
         matches = []
         for record in transactions:
             normalised = self._normalise_transaction(record)
@@ -1111,7 +1044,7 @@ class MCPApplication:
         if not session:
             raise web.HTTPBadRequest(text="Session required")
 
-        transactions = await self._collect_transactions(session, limit=500)
+        transactions = await self._collect_transactions(session, request, limit=500)
         for record in transactions:
             normalised = self._normalise_transaction(record)
             if str(normalised.get("id")) == str(resource_id):
@@ -1125,7 +1058,7 @@ class MCPApplication:
         if not session:
             raise web.HTTPBadRequest(text="Session required")
         today = datetime.now(timezone.utc).date().isoformat()
-        transactions = await self._collect_transactions(session, since=today, until=today)
+        transactions = await self._collect_transactions(session, request, since=today, until=today)
         normalised = [self._normalise_transaction(record) for record in transactions]
         categories: Dict[str, float] = defaultdict(float)
         total_spent = 0.0
@@ -1163,7 +1096,7 @@ class MCPApplication:
         now = datetime.now(timezone.utc)
         month = now.strftime("%Y-%m")
         month_start = now.replace(day=1).date().isoformat()
-        transactions = await self._collect_transactions(session, since=month_start)
+        transactions = await self._collect_transactions(session, request, since=month_start)
         normalised = [self._normalise_transaction(record) for record in transactions]
         monthly_spend = 0.0
         for txn in normalised:
@@ -1210,6 +1143,7 @@ class MCPApplication:
 
         transactions = await self._collect_transactions(
             session,
+            request,
             since=since,
             until=until,
             limit=limit,
@@ -1282,6 +1216,9 @@ class MCPApplication:
         scope = params.get("scope", "transactions accounts")
         state = params.get("state")
         resource = params.get("resource")
+        aspsp_name = params.get("aspsp_name")
+        aspsp_country = params.get("aspsp_country")
+        psu_type = params.get("psu_type", "personal")
 
         if not client_id or not redirect_uri:
             raise web.HTTPBadRequest(text="Missing client_id or redirect_uri")
@@ -1333,32 +1270,124 @@ class MCPApplication:
                 ).strip()
                 return web.Response(text=html, content_type="text/html")
 
-        code = self.oauth.issue_authorization_code(client_id, redirect_uri, scope, state, resource)
-        query = {"code": code}
-        if state:
-            query["state"] = state
-        location = f"{redirect_uri}?{urlencode(query)}"
+        service = self._ensure_enable_banking()
+        base_url = _external_base_url(request)
+        callback_uri = f"{base_url}/oauth/enable-banking/callback"
 
-        html_body: Optional[str] = None
-        if client.get("token_endpoint_auth_method") == "none":
-            html_body = textwrap.dedent(
+        # Clean up stale pending states
+        now = time.time()
+        expired = [key for key, ctx in self.pending_enable_banking.items() if now - ctx.get("created_at", 0) > 900]
+        for key in expired:
+            self.pending_enable_banking.pop(key, None)
+
+        eb_state = secrets.token_urlsafe(32)
+        self.pending_enable_banking[eb_state] = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "resource": resource,
+            "callback_uri": callback_uri,
+            "created_at": now,
+        }
+
+        try:
+            payload = await service.initiate_auth(
+                redirect_url=callback_uri,
+                state=eb_state,
+                aspsp_name=aspsp_name,
+                aspsp_country=aspsp_country,
+                psu_type=psu_type,
+            )
+        except RuntimeError as exc:
+            LOGGER.error("Enable Banking auth initiation failed: %s", exc)
+            raise web.HTTPServiceUnavailable(text="Enable Banking authorization failed. Try again later.") from exc
+
+        auth_url = payload.get("url")
+        if not auth_url:
+            raise web.HTTPServiceUnavailable(text="Enable Banking did not return an authorization URL")
+
+        html_body = textwrap.dedent(
+            f"""
+            <!doctype html>
+            <html>
+                <head><title>Enable Banking Consent</title></head>
+                <body>
+                    <h1>Continue to your bank</h1>
+                    <p>We need to confirm access to your bank account via Enable Banking.</p>
+                    <p><a href="{auth_url}">Click here to continue</a></p>
+                </body>
+            </html>
+            """
+        ).strip()
+        headers = {"Location": auth_url, "Cache-Control": "no-store"}
+        if "text/html" in request.headers.get("Accept", "text/html"):
+            return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
+        return web.Response(status=302, headers=headers)
+
+    async def oauth_enable_banking_callback(self, request: web.Request) -> web.StreamResponse:
+        params = request.rel_url.query
+        error = params.get("error")
+        error_description = params.get("error_description")
+        state = params.get("state")
+        code = params.get("code")
+        if error:
+            message = error_description or error
+            html = textwrap.dedent(
                 f"""
                 <!doctype html>
                 <html>
-                    <head><title>Enable Banking OAuth</title></head>
+                    <head><title>Enable Banking Error</title></head>
                     <body>
-                        <h1>Select Your Bank</h1>
-                        <p>Authorization complete. Continue to your callback:</p>
-                        <p><a href="{location}">{location}</a></p>
+                        <h1>Consent Failed</h1>
+                        <p>{message}</p>
                     </body>
                 </html>
                 """
             ).strip()
+            return web.Response(text=html, content_type="text/html", status=400)
 
+        if not code or not state:
+            raise web.HTTPBadRequest(text="Missing code or state from Enable Banking")
+
+        context = self.pending_enable_banking.pop(state, None)
+        if not context:
+            raise web.HTTPBadRequest(text="Unknown or expired consent state")
+
+        service = self._ensure_enable_banking()
+        callback_uri = context.get("callback_uri") or f"{_external_base_url(request)}/oauth/enable-banking/callback"
+        tokens, raw = await service.exchange_code(code, callback_uri)
+        extra = {"enable_banking_tokens": tokens.to_dict(), "enable_banking_expires_in": raw.get("expires_in")}
+
+        auth_code = self.oauth.issue_authorization_code(
+            context["client_id"],
+            context["redirect_uri"],
+            context["scope"],
+            context.get("state"),
+            context.get("resource"),
+            extra=extra,
+        )
+        query = {"code": auth_code}
+        if context.get("state"):
+            query["state"] = context["state"]
+        location = f"{context['redirect_uri']}?{urlencode(query)}"
+
+        html_body = textwrap.dedent(
+            f"""
+            <!doctype html>
+            <html>
+                <head><title>Authorization Complete</title></head>
+                <body>
+                    <h1>Consent Complete</h1>
+                    <p>You can close this tab. If not redirected automatically, continue here:</p>
+                    <p><a href="{location}">{location}</a></p>
+                </body>
+            </html>
+            """
+        ).strip()
         headers = {"Location": location, "Cache-Control": "no-store"}
-        if html_body and "text/html" in request.headers.get("Accept", "text/html"):
+        if "text/html" in request.headers.get("Accept", "text/html"):
             return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
-
         return web.Response(status=302, headers=headers)
 
     async def oauth_token(self, request: web.Request) -> web.Response:
