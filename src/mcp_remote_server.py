@@ -33,20 +33,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import calendar
 import json
 import logging
 import os
 import secrets
 import textwrap
 import time
+from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import urlencode
 from uuid import uuid4
 
 from aiohttp import web
 
+from .enable_banking_service import EnableBankingService, EnableBankingTokens
 
 LOGGER = logging.getLogger("adhd_budget.mcp")
 
@@ -169,6 +173,7 @@ class Session:
     created_at: float = field(default_factory=lambda: time.time())
     queue: "asyncio.Queue[Dict[str, Any]]" = field(default_factory=asyncio.Queue)
     last_seen: float = field(default_factory=lambda: time.time())
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def heartbeat(self) -> None:
         """Update last seen timestamp."""
@@ -215,6 +220,16 @@ class SessionManager:
                 if self._sessions[session_id].last_seen < cutoff:
                     LOGGER.info("Removing expired MCP session %s", session_id)
                     self._sessions.pop(session_id, None)
+
+
+@dataclass
+class ToolDefinition:
+    """Metadata describing an MCP tool."""
+
+    handler: Callable[[Dict[str, Any], Optional[Session], web.Request], Awaitable[Dict[str, Any]]]
+    description: str
+    input_schema: Dict[str, Any]
+    protected: bool = True
 
 
 class OAuthProvider:
@@ -296,6 +311,8 @@ class OAuthProvider:
         scope: str,
         state: Optional[str],
         resource: Optional[str],
+        *,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
@@ -314,6 +331,7 @@ class OAuthProvider:
             "state": state,
             "resource": resource,
             "expires_at": time.time() + 300,
+            "extra": extra or {},
         }
         return code
 
@@ -388,15 +406,18 @@ class OAuthProvider:
                 resource = payload.get("resource") or stored.get("resource")
                 self._validate_resource(resource, stored.get("resource"))
                 scope = stored["scope"]
+                extra = stored.get("extra")
             else:
                 scope = payload.get("scope") or client.get("scope", "transactions accounts")
                 resource = payload.get("resource")
+                extra = None
 
-            return self._issue_tokens(client_id, scope, resource)
+            return self._issue_tokens(client_id, scope, resource, extra=extra)
 
         if grant_type == "refresh_token":
             refresh_token = payload.get("refresh_token")
             token_info = self.refresh_tokens.get(refresh_token)
+            extra = None
             if token_info:
                 if token_info["client_id"] != client_id:
                     raise web.HTTPBadRequest(text="Client mismatch")
@@ -406,11 +427,12 @@ class OAuthProvider:
                 resource = payload.get("resource") or token_info.get("resource")
                 self._validate_resource(resource, token_info.get("resource"))
                 scope = token_info["scope"]
+                extra = token_info.get("extra")
             else:
                 scope = payload.get("scope") or client.get("scope", "transactions accounts")
                 resource = payload.get("resource")
 
-            return self._issue_tokens(client_id, scope, resource)
+            return self._issue_tokens(client_id, scope, resource, extra=extra)
 
         raise web.HTTPBadRequest(text="Unsupported grant_type")
 
@@ -443,23 +465,35 @@ class OAuthProvider:
 
         raise web.HTTPUnauthorized(text="Invalid bearer token")
 
-    def _issue_tokens(self, client_id: str, scope: str, resource: Optional[str]) -> Dict[str, Any]:
+    def _issue_tokens(
+        self,
+        client_id: str,
+        scope: str,
+        resource: Optional[str],
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         access_token = secrets.token_urlsafe(32)
         refresh_token = secrets.token_urlsafe(32)
         expires_in = 3600
         now = time.time()
+        extra_payload = extra or {}
         token_info = {
             "client_id": client_id,
             "scope": scope,
             "resource": resource,
             "issued_at": now,
             "expires_at": now + expires_in,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "extra": extra_payload,
         }
         self.access_tokens[access_token] = token_info
         self.refresh_tokens[refresh_token] = {
             **token_info,
             "refresh_token": refresh_token,
             "expires_at": now + 7 * 86400,
+            "extra": extra_payload,
         }
         return {
             "access_token": access_token,
@@ -469,6 +503,15 @@ class OAuthProvider:
             "scope": scope,
             "resource": resource,
         }
+
+    def update_token_extra(self, access_token: str, extra: Dict[str, Any]) -> None:
+        token_info = self.access_tokens.get(access_token)
+        if not token_info:
+            return
+        token_info["extra"] = extra
+        refresh_token = token_info.get("refresh_token")
+        if refresh_token and refresh_token in self.refresh_tokens:
+            self.refresh_tokens[refresh_token]["extra"] = extra
 
 
 def apply_cors_headers(response: web.StreamResponse, origin: Optional[str]) -> None:
@@ -508,6 +551,8 @@ class MCPApplication:
     def __init__(self) -> None:
         self.sessions = SessionManager()
         self.oauth = OAuthProvider()
+        self.enable_banking = EnableBankingService.from_environment()
+        self.pending_enable_banking: Dict[str, Dict[str, Any]] = {}
         self.app = web.Application(middlewares=[cors_and_origin_middleware])
         self.app.router.add_route("GET", "/mcp", self.handle_get)
         # Backwards compatibility with earlier test harnesses that used
@@ -520,22 +565,94 @@ class MCPApplication:
         self.app.router.add_get("/.well-known/mcp.json", self.mcp_manifest)
         self._register_oauth_routes()
 
-        self.tools: Dict[str, Callable[[Dict[str, Any], Optional[Session], web.Request], Awaitable[Dict[str, Any]]]] = {
-            "echo": self.tool_echo,
-            "search": self.tool_search,
-            "fetch": self.tool_fetch,
-            "summary.today": self.tool_summary_today,
-            "projection.month": self.tool_projection_month,
-            "transactions.query": self.tool_transactions_query,
+        self.tool_definitions: Dict[str, ToolDefinition] = {
+            "echo": ToolDefinition(
+                handler=self.tool_echo,
+                description="Echo a short message back to the caller (debugging tool).",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": ["string", "number", "boolean", "null"], "description": "Value to echo back."}
+                    },
+                    "additionalProperties": False,
+                },
+                protected=False,
+            ),
+            "search": ToolDefinition(
+                handler=self.tool_search,
+                description="Search recent transactions across all connected accounts.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search term matched against merchant, description or reference."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum number of matches to return."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "fetch": ToolDefinition(
+                handler=self.tool_fetch,
+                description="Fetch a single transaction by its identifier.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Transaction identifier (transactionId)."},
+                    },
+                    "required": ["id"],
+                    "additionalProperties": False,
+                },
+            ),
+            "summary.today": ToolDefinition(
+                handler=self.tool_summary_today,
+                description="Summarise today's spending across connected Enable Banking accounts.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "currency": {"type": "string", "description": "Preferred ISO currency code for totals."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "projection.month": ToolDefinition(
+                handler=self.tool_projection_month,
+                description="Project end-of-month spend based on current month-to-date activity.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "budget": {"type": "number", "description": "Monthly budget used for variance calculations."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            "transactions.query": ToolDefinition(
+                handler=self.tool_transactions_query,
+                description="List recent transactions with optional date filters.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "account_id": {"type": "string", "description": "Limit results to a specific account resourceId."},
+                        "since": {"type": "string", "description": "ISO date (YYYY-MM-DD) lower bound."},
+                        "until": {"type": "string", "description": "ISO date (YYYY-MM-DD) upper bound."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum number of transactions to return."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
         }
 
-        self.protected_tools = {"search", "fetch", "summary.today", "projection.month", "transactions.query"}
+        self.tools = {name: definition.handler for name, definition in self.tool_definitions.items()}
+        self.protected_tools = {
+            name
+            for name, definition in self.tool_definitions.items()
+            if definition.protected
+        }
 
     def _register_oauth_routes(self) -> None:
         self.app.router.add_get("/.well-known/oauth-authorization-server", self.oauth_metadata)
         self.app.router.add_get("/.well-known/oauth-protected-resource", self.oauth_protected_resource)
         self.app.router.add_post("/oauth/register", self.oauth_register)
         self.app.router.add_get("/oauth/authorize", self.oauth_authorize)
+        self.app.router.add_get("/oauth/enable-banking/callback", self.oauth_enable_banking_callback)
         self.app.router.add_post("/oauth/token", self.oauth_token)
         self.app.router.add_post("/oauth/revoke", self.oauth_revoke)
 
@@ -681,12 +798,26 @@ class MCPApplication:
         try:
             result = await handler(payload.get("params", {}), request, session)
         except web.HTTPException as exc:
-            return self._jsonrpc_error(request_id, -32000, exc.text, status=exc.status)
+            status = self._determine_error_status(exc, request)
+            return self._jsonrpc_error(request_id, -32000, exc.text, status=status)
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.exception("Unhandled MCP error")
             return self._jsonrpc_error(request_id, -32603, f"Internal error: {exc}")
 
         return web.json_response({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    def _determine_error_status(self, exc: web.HTTPException, request: web.Request) -> int:
+        """Return the appropriate HTTP status for a tool error."""
+
+        if exc.status == 401 and request.headers.get("Authorization"):
+            # Authenticated callers already supplied a bearer token, so surface
+            # authorization issues (e.g. missing Enable Banking consent) via the
+            # JSON-RPC error object instead of the HTTP status line. This keeps
+            # long-running streaming clients connected while still relaying the
+            # underlying error message.
+            return 200
+
+        return exc.status
 
     def _validate_headers(self, request: web.Request) -> None:
         content_type = request.headers.get("Content-Type", "").split(";")[0].strip()
@@ -749,16 +880,12 @@ class MCPApplication:
 
     async def rpc_tools_list(self, params: Dict[str, Any], request: web.Request, session: Session) -> Dict[str, Any]:
         tools = []
-        for name, handler in self.tools.items():
+        for name, definition in self.tool_definitions.items():
             tools.append(
                 {
                     "name": name,
-                    "description": handler.__doc__ or "",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
+                    "description": definition.description,
+                    "inputSchema": definition.input_schema,
                 }
             )
         return {"tools": tools}
@@ -774,14 +901,114 @@ class MCPApplication:
             raise web.HTTPBadRequest(text=f"Unknown tool: {name}")
 
         token = None
+        token_info: Optional[Dict[str, Any]] = None
         if name in self.protected_tools:
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 token = auth_header.split(" ", 1)[1]
-            self.oauth.validate_bearer(token)
+            token_info = self.oauth.validate_bearer(token)
+            request["oauth_token_info"] = token_info
+            request["oauth_access_token"] = token
 
         handler = self.tools[name]
         return await handler(arguments, session, request)
+
+    def _ensure_enable_banking(self) -> EnableBankingService:
+        if not self.enable_banking or not self.enable_banking.is_configured:
+            raise web.HTTPServiceUnavailable(
+                text=(
+                    "Enable Banking credentials are not configured. Set ENABLE_APP_ID "
+                    "and ENABLE_PRIVATE_KEY_PATH in the server environment."
+                )
+            )
+        return self.enable_banking
+
+    def _get_enable_banking_tokens(self, request: web.Request) -> EnableBankingTokens:
+        token_info = request.get("oauth_token_info")
+        if not token_info:
+            raise web.HTTPUnauthorized(text="Enable Banking authorization required. Reconnect the MCP connector.")
+        extra = token_info.get("extra") or {}
+        payload = extra.get("enable_banking_tokens")
+        if not payload:
+            raise web.HTTPUnauthorized(text="No Enable Banking consent found. Re-run the OAuth connection flow.")
+        return EnableBankingTokens.from_dict(payload)
+
+    def _update_enable_banking_tokens(self, request: web.Request, tokens: EnableBankingTokens) -> None:
+        token_info = request.get("oauth_token_info") or {}
+        extra = dict(token_info.get("extra") or {})
+        extra["enable_banking_tokens"] = tokens.to_dict()
+        access_token = request.get("oauth_access_token")
+        if access_token:
+            self.oauth.update_token_extra(access_token, extra)
+        if token_info is not None:
+            token_info.setdefault("extra", {})
+            token_info["extra"].update(extra)
+
+    async def _collect_transactions(
+        self,
+        session: Session,
+        request: web.Request,
+        *,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: Optional[int] = None,
+        account_id: Optional[str] = None,
+    ) -> list[Dict[str, Any]]:
+        service = self._ensure_enable_banking()
+        tokens = self._get_enable_banking_tokens(request)
+        account_ids = [account_id] if account_id else None
+        transactions, tokens = await service.fetch_transactions(
+            tokens,
+            account_ids=account_ids,
+            date_from=since,
+            date_to=until,
+            limit=limit,
+        )
+        self._update_enable_banking_tokens(request, tokens)
+        return transactions
+
+    @staticmethod
+    def _normalise_transaction(record: Dict[str, Any]) -> Dict[str, Any]:
+        amount_info = record.get("transactionAmount") or {}
+        raw_amount = amount_info.get("amount")
+        try:
+            amount = float(raw_amount) if raw_amount is not None else 0.0
+        except (TypeError, ValueError):
+            amount = 0.0
+        indicator = (record.get("creditDebitIndicator") or "").upper()
+        if indicator == "DBIT" and amount > 0:
+            signed_amount = -abs(amount)
+        elif indicator == "CRDT" and amount < 0:
+            signed_amount = abs(amount)
+        else:
+            signed_amount = amount
+        merchant = record.get("creditorName") or record.get("debtorName") or "Unknown"
+        description = record.get("remittanceInformationUnstructured") or record.get("remittanceInformationStructured")
+        reference = record.get("endToEndId") or record.get("transactionId")
+        return {
+            "id": record.get("transactionId") or record.get("internalId"),
+            "date": record.get("bookingDate") or record.get("valueDate"),
+            "valueDate": record.get("valueDate"),
+            "amount": signed_amount,
+            "currency": amount_info.get("currency"),
+            "merchant": merchant,
+            "description": description,
+            "reference": reference,
+            "raw": record,
+        }
+
+    @staticmethod
+    def _categorise_transaction(merchant: str) -> str:
+        if not merchant:
+            return "other"
+        value = merchant.lower()
+        if any(keyword in value for keyword in ("tesco", "aldi", "lidl", "asda", "market", "grocery")):
+            return "groceries"
+        if any(keyword in value for keyword in ("uber", "bolt", "tfl", "transport", "train", "bus")):
+            return "transport"
+        if any(keyword in value for keyword in ("coffee", "cafe", "restaurant", "pizza", "bar")):
+            return "eating_out"
+        return "other"
 
     async def tool_echo(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Echoes the provided message back to the caller."""
@@ -792,25 +1019,35 @@ class MCPApplication:
     async def tool_search(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Search recent transactions by free text (requires OAuth token)."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
         query = (arguments.get("query") or "").lower()
-        results = []
-        sample = [
-            {"id": "tx-101", "merchant": "Tesco", "amount": -42.5, "tags": ["groceries"]},
-            {"id": "tx-205", "merchant": "Starbucks", "amount": -5.8, "tags": ["coffee", "treats"]},
-            {"id": "tx-330", "merchant": "TFL", "amount": -3.2, "tags": ["transport"]},
-        ]
+        limit = int(arguments.get("limit", 25))
+        transactions = await self._collect_transactions(session, request, limit=200)
+        matches = []
+        for record in transactions:
+            normalised = self._normalise_transaction(record)
+            haystack = " ".join(
+                filter(
+                    None,
+                    [
+                        normalised.get("merchant"),
+                        normalised.get("description"),
+                        normalised.get("reference"),
+                    ],
+                )
+            ).lower()
+            if not query or query in haystack:
+                matches.append(normalised)
+            if len(matches) >= limit:
+                break
 
-        for entry in sample:
-            if not query or query in entry["merchant"].lower() or any(query in tag for tag in entry["tags"]):
-                results.append(entry)
+        await self.sessions.publish(
+            session.id,
+            {"type": "search", "query": query, "count": len(matches), "timestamp": time.time()},
+        )
 
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {"type": "search", "query": query, "count": len(results), "timestamp": time.time()},
-            )
-
-        return {"results": results, "query": query}
+        return {"results": matches, "query": query}
 
     async def tool_fetch(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Fetch a transaction by id (requires OAuth token)."""
@@ -818,88 +1055,135 @@ class MCPApplication:
         resource_id = arguments.get("id")
         if not resource_id:
             raise web.HTTPBadRequest(text="Missing id argument")
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
 
-        record = {
-            "id": resource_id,
-            "date": "2025-01-15T12:00:00Z",
-            "amount": -42.5,
-            "merchant": "Tesco",
-            "category": "groceries",
-            "notes": "Sample data from MCP server",
-        }
-        return {"resource": record}
+        transactions = await self._collect_transactions(session, request, limit=500)
+        for record in transactions:
+            normalised = self._normalise_transaction(record)
+            if str(normalised.get("id")) == str(resource_id):
+                return {"resource": normalised}
+
+        raise web.HTTPNotFound(text="Transaction not found")
 
     async def tool_summary_today(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
-        """Return a mock summary of today's spending (requires OAuth token)."""
+        """Summarise today's spending using Enable Banking transactions."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        today = datetime.now(timezone.utc).date().isoformat()
+        transactions = await self._collect_transactions(session, request, since=today, until=today)
+        normalised = [self._normalise_transaction(record) for record in transactions]
+        categories: Dict[str, float] = defaultdict(float)
+        total_spent = 0.0
+        expense_count = 0
+        for txn in normalised:
+            indicator = (txn["raw"].get("creditDebitIndicator") or "").upper()
+            if indicator == "CRDT":
+                continue
+            amount = abs(txn.get("amount") or 0.0)
+            if amount == 0:
+                continue
+            total_spent += amount
+            expense_count += 1
+            categories[self._categorise_transaction(txn.get("merchant", ""))] += amount
+
+        budget = float(arguments.get("budget", 120.0))
+        variance = total_spent - budget
         return {
             "summary": {
-                "date": time.strftime("%Y-%m-%d"),
-                "total_spent": 132.48,
-                "categories": {"groceries": 54.12, "transport": 28.5, "eating_out": 36.42, "other": 13.44},
-                "daily_budget": 120.0,
-                "variance": 12.48,
-                "status": "over",
+                "date": today,
+                "transactions": expense_count,
+                "total_spent": round(total_spent, 2),
+                "categories": {k: round(v, 2) for k, v in categories.items()},
+                "daily_budget": budget,
+                "variance": round(variance, 2),
+                "status": "over" if variance > 0 else "under",
             }
         }
 
     async def tool_projection_month(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
-        """Return a projection for the current month (requires OAuth token)."""
+        """Return a projection for the current month based on live data."""
 
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        now = datetime.now(timezone.utc)
+        month = now.strftime("%Y-%m")
+        month_start = now.replace(day=1).date().isoformat()
+        transactions = await self._collect_transactions(session, request, since=month_start)
+        normalised = [self._normalise_transaction(record) for record in transactions]
+        monthly_spend = 0.0
+        for txn in normalised:
+            indicator = (txn["raw"].get("creditDebitIndicator") or "").upper()
+            if indicator == "CRDT":
+                continue
+            monthly_spend += abs(txn.get("amount") or 0.0)
+        days_in_month = calendar.monthrange(now.year, now.month)[1]
+        days_elapsed = max(1, now.day)
+        projected = (monthly_spend / days_elapsed) * days_in_month
+        budget = float(arguments.get("budget", 3500.0))
+        variance = projected - budget
         return {
             "projection": {
-                "month": time.strftime("%Y-%m"),
-                "projected_spend": 3845.32,
-                "budget": 3600.0,
-                "variance": 245.32,
-                "pace": "over",
-                "month_end_balance": -245.32,
+                "month": month,
+                "current_spend": round(monthly_spend, 2),
+                "projected_spend": round(projected, 2),
+                "budget": budget,
+                "variance": round(variance, 2),
+                "pace": "over" if variance > 0 else "under",
+                "days_remaining": days_in_month - days_elapsed,
             }
         }
 
     async def tool_transactions_query(self, arguments: Dict[str, Any], session: Optional[Session], request: web.Request) -> Dict[str, Any]:
         """Query recent transactions and stream progress updates (requires OAuth token)."""
 
-        since = arguments.get("since", "2025-01-01T00:00:00Z")
-        limit = int(arguments.get("limit", 5))
+        if not session:
+            raise web.HTTPBadRequest(text="Session required")
+        since = arguments.get("since")
+        until = arguments.get("until")
+        limit = int(arguments.get("limit", 50))
+        account_id = arguments.get("account_id")
 
-        # Demonstrate streaming progress over SSE.
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {
-                    "event": "progress",
-                    "type": "progress",
-                    "message": "Fetching transactions",
-                    "timestamp": time.time(),
-                },
-            )
-
-        await asyncio.sleep(0.1)
-
-        if session:
-            await self.sessions.publish(
-                session.id,
-                {
-                    "event": "progress",
-                    "type": "progress",
-                    "message": "Normalising results",
-                    "timestamp": time.time(),
-                },
-            )
-
-        transactions = [
+        await self.sessions.publish(
+            session.id,
             {
-                "id": f"tx-{index:03d}",
-                "date": "2025-01-15T12:00:00Z",
-                "amount": (-1) ** index * 42.5,
-                "merchant": "Sample Merchant",
-                "category": "misc",
-            }
-            for index in range(1, limit + 1)
-        ]
+                "event": "progress",
+                "type": "progress",
+                "message": "Fetching transactions",
+                "timestamp": time.time(),
+            },
+        )
 
-        return {"transactions": transactions, "since": since, "limit": limit}
+        transactions = await self._collect_transactions(
+            session,
+            request,
+            since=since,
+            until=until,
+            limit=limit,
+            account_id=account_id,
+        )
+
+        await self.sessions.publish(
+            session.id,
+            {
+                "event": "progress",
+                "type": "progress",
+                "message": "Normalising results",
+                "timestamp": time.time(),
+            },
+        )
+
+        normalised = [self._normalise_transaction(record) for record in transactions]
+
+        return {
+            "transactions": normalised,
+            "count": len(normalised),
+            "since": since,
+            "until": until,
+            "limit": limit,
+            "account_id": account_id,
+        }
 
     async def oauth_metadata(self, request: web.Request) -> web.Response:
         base_url = _external_base_url(request)
@@ -946,6 +1230,9 @@ class MCPApplication:
         scope = params.get("scope", "transactions accounts")
         state = params.get("state")
         resource = params.get("resource")
+        aspsp_name = params.get("aspsp_name")
+        aspsp_country = params.get("aspsp_country")
+        psu_type = params.get("psu_type", "personal")
 
         if not client_id or not redirect_uri:
             raise web.HTTPBadRequest(text="Missing client_id or redirect_uri")
@@ -997,32 +1284,124 @@ class MCPApplication:
                 ).strip()
                 return web.Response(text=html, content_type="text/html")
 
-        code = self.oauth.issue_authorization_code(client_id, redirect_uri, scope, state, resource)
-        query = {"code": code}
-        if state:
-            query["state"] = state
-        location = f"{redirect_uri}?{urlencode(query)}"
+        service = self._ensure_enable_banking()
+        base_url = _external_base_url(request)
+        callback_uri = f"{base_url}/oauth/enable-banking/callback"
 
-        html_body: Optional[str] = None
-        if client.get("token_endpoint_auth_method") == "none":
-            html_body = textwrap.dedent(
+        # Clean up stale pending states
+        now = time.time()
+        expired = [key for key, ctx in self.pending_enable_banking.items() if now - ctx.get("created_at", 0) > 900]
+        for key in expired:
+            self.pending_enable_banking.pop(key, None)
+
+        eb_state = secrets.token_urlsafe(32)
+        self.pending_enable_banking[eb_state] = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "resource": resource,
+            "callback_uri": callback_uri,
+            "created_at": now,
+        }
+
+        try:
+            payload = await service.initiate_auth(
+                redirect_url=callback_uri,
+                state=eb_state,
+                aspsp_name=aspsp_name,
+                aspsp_country=aspsp_country,
+                psu_type=psu_type,
+            )
+        except RuntimeError as exc:
+            LOGGER.error("Enable Banking auth initiation failed: %s", exc)
+            raise web.HTTPServiceUnavailable(text="Enable Banking authorization failed. Try again later.") from exc
+
+        auth_url = payload.get("url")
+        if not auth_url:
+            raise web.HTTPServiceUnavailable(text="Enable Banking did not return an authorization URL")
+
+        html_body = textwrap.dedent(
+            f"""
+            <!doctype html>
+            <html>
+                <head><title>Enable Banking Consent</title></head>
+                <body>
+                    <h1>Continue to your bank</h1>
+                    <p>We need to confirm access to your bank account via Enable Banking.</p>
+                    <p><a href="{auth_url}">Click here to continue</a></p>
+                </body>
+            </html>
+            """
+        ).strip()
+        headers = {"Location": auth_url, "Cache-Control": "no-store"}
+        if "text/html" in request.headers.get("Accept", "text/html"):
+            return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
+        return web.Response(status=302, headers=headers)
+
+    async def oauth_enable_banking_callback(self, request: web.Request) -> web.StreamResponse:
+        params = request.rel_url.query
+        error = params.get("error")
+        error_description = params.get("error_description")
+        state = params.get("state")
+        code = params.get("code")
+        if error:
+            message = error_description or error
+            html = textwrap.dedent(
                 f"""
                 <!doctype html>
                 <html>
-                    <head><title>Enable Banking OAuth</title></head>
+                    <head><title>Enable Banking Error</title></head>
                     <body>
-                        <h1>Select Your Bank</h1>
-                        <p>Authorization complete. Continue to your callback:</p>
-                        <p><a href="{location}">{location}</a></p>
+                        <h1>Consent Failed</h1>
+                        <p>{message}</p>
                     </body>
                 </html>
                 """
             ).strip()
+            return web.Response(text=html, content_type="text/html", status=400)
 
+        if not code or not state:
+            raise web.HTTPBadRequest(text="Missing code or state from Enable Banking")
+
+        context = self.pending_enable_banking.pop(state, None)
+        if not context:
+            raise web.HTTPBadRequest(text="Unknown or expired consent state")
+
+        service = self._ensure_enable_banking()
+        callback_uri = context.get("callback_uri") or f"{_external_base_url(request)}/oauth/enable-banking/callback"
+        tokens, raw = await service.exchange_code(code, callback_uri)
+        extra = {"enable_banking_tokens": tokens.to_dict(), "enable_banking_expires_in": raw.get("expires_in")}
+
+        auth_code = self.oauth.issue_authorization_code(
+            context["client_id"],
+            context["redirect_uri"],
+            context["scope"],
+            context.get("state"),
+            context.get("resource"),
+            extra=extra,
+        )
+        query = {"code": auth_code}
+        if context.get("state"):
+            query["state"] = context["state"]
+        location = f"{context['redirect_uri']}?{urlencode(query)}"
+
+        html_body = textwrap.dedent(
+            f"""
+            <!doctype html>
+            <html>
+                <head><title>Authorization Complete</title></head>
+                <body>
+                    <h1>Consent Complete</h1>
+                    <p>You can close this tab. If not redirected automatically, continue here:</p>
+                    <p><a href="{location}">{location}</a></p>
+                </body>
+            </html>
+            """
+        ).strip()
         headers = {"Location": location, "Cache-Control": "no-store"}
-        if html_body and "text/html" in request.headers.get("Accept", "text/html"):
+        if "text/html" in request.headers.get("Accept", "text/html"):
             return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
-
         return web.Response(status=302, headers=headers)
 
     async def oauth_token(self, request: web.Request) -> web.Response:
