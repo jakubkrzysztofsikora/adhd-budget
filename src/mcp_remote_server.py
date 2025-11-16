@@ -44,7 +44,7 @@ from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Type
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -899,12 +899,23 @@ class MCPApplication:
         handler = self.tools[name]
         return await handler(arguments, session, request)
 
-    def _ensure_enable_banking(self) -> EnableBankingService:
-        if not self.enable_banking or not self.enable_banking.is_configured:
-            raise web.HTTPServiceUnavailable(
+    def _is_enable_banking_configured(self) -> bool:
+        return bool(self.enable_banking and self.enable_banking.is_configured)
+
+    def _ensure_enable_banking(
+        self,
+        *,
+        error_cls: Type[web.HTTPException] = web.HTTPServiceUnavailable,
+        message: Optional[str] = None,
+    ) -> EnableBankingService:
+        if not self._is_enable_banking_configured():
+            raise error_cls(
                 text=(
-                    "Enable Banking credentials are not configured. Set ENABLE_APP_ID "
-                    "and ENABLE_PRIVATE_KEY_PATH in the server environment."
+                    message
+                    or (
+                        "Enable Banking credentials are not configured. Set ENABLE_APP_ID "
+                        "and ENABLE_PRIVATE_KEY_PATH in the server environment."
+                    )
                 )
             )
         return self.enable_banking
@@ -916,6 +927,13 @@ class MCPApplication:
         extra = token_info.get("extra") or {}
         payload = extra.get("enable_banking_tokens")
         if not payload:
+            if extra.get("enable_banking_missing"):
+                raise web.HTTPUnauthorized(
+                    text=(
+                        "Bank access has not been configured on this MCP server. "
+                        "Ask the operator to provide ENABLE_APP_ID and ENABLE_PRIVATE_KEY_PATH."
+                    )
+                )
             raise web.HTTPUnauthorized(text="No Enable Banking consent found. Re-run the OAuth connection flow.")
         return EnableBankingTokens.from_dict(payload)
 
@@ -923,6 +941,7 @@ class MCPApplication:
         token_info = request.get("oauth_token_info") or {}
         extra = dict(token_info.get("extra") or {})
         extra["enable_banking_tokens"] = tokens.to_dict()
+        extra.pop("enable_banking_missing", None)
         access_token = request.get("oauth_access_token")
         if access_token:
             self.oauth.update_token_extra(access_token, extra)
@@ -940,6 +959,13 @@ class MCPApplication:
         limit: Optional[int] = None,
         account_id: Optional[str] = None,
     ) -> list[Dict[str, Any]]:
+        if not self._is_enable_banking_configured():
+            raise web.HTTPUnauthorized(
+                text=(
+                    "Enable Banking is not configured on this server. "
+                    "Provide ENABLE_APP_ID and ENABLE_PRIVATE_KEY_PATH to unlock financial tools."
+                )
+            )
         service = self._ensure_enable_banking()
         tokens = self._get_enable_banking_tokens(request)
         account_ids = [account_id] if account_id else None
@@ -1209,6 +1235,66 @@ class MCPApplication:
         response = web.json_response(client, status=201)
         return response
 
+    def _redirect_with_code(
+        self,
+        *,
+        redirect_uri: str,
+        code: str,
+        state: Optional[str],
+        request: web.Request,
+        message: Optional[str] = None,
+    ) -> web.StreamResponse:
+        query = {"code": code}
+        if state:
+            query["state"] = state
+        location = f"{redirect_uri}?{urlencode(query)}"
+        headers = {"Location": location, "Cache-Control": "no-store"}
+        accept = request.headers.get("Accept", "text/html")
+        if "text/html" in accept:
+            html_body = textwrap.dedent(
+                f"""
+                <!doctype html>
+                <html>
+                    <head><title>Authorization Complete</title></head>
+                    <body>
+                        <h1>Authorization Complete</h1>
+                        <p>{message or 'You can close this tab or return to your MCP client.'}</p>
+                        <p><a href="{location}">{location}</a></p>
+                    </body>
+                </html>
+                """
+            ).strip()
+            return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
+        return web.Response(status=302, headers=headers)
+
+    def _issue_authorization_redirect(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        scope: str,
+        state: Optional[str],
+        resource: Optional[str],
+        request: web.Request,
+        extra: Optional[Dict[str, Any]] = None,
+        message: Optional[str] = None,
+    ) -> web.StreamResponse:
+        auth_code = self.oauth.issue_authorization_code(
+            client_id,
+            redirect_uri,
+            scope,
+            state,
+            resource,
+            extra=extra,
+        )
+        return self._redirect_with_code(
+            redirect_uri=redirect_uri,
+            code=auth_code,
+            state=state,
+            request=request,
+            message=message,
+        )
+
     async def oauth_authorize(self, request: web.Request) -> web.StreamResponse:
         params = request.rel_url.query
         client_id = params.get("client_id")
@@ -1269,6 +1355,24 @@ class MCPApplication:
                     """
                 ).strip()
                 return web.Response(text=html, content_type="text/html")
+
+        if not self._is_enable_banking_configured():
+            LOGGER.warning(
+                "Enable Banking credentials missing. Auto-approving OAuth request for client %s", client_id
+            )
+            return self._issue_authorization_redirect(
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                scope=scope,
+                state=state,
+                resource=resource,
+                request=request,
+                extra={"enable_banking_missing": True},
+                message=(
+                    "Enable Banking credentials are not configured on this server. "
+                    "Limited tooling will be available until the operator adds them."
+                ),
+            )
 
         service = self._ensure_enable_banking()
         base_url = _external_base_url(request)
@@ -1359,36 +1463,16 @@ class MCPApplication:
         tokens, raw = await service.exchange_code(code, callback_uri)
         extra = {"enable_banking_tokens": tokens.to_dict(), "enable_banking_expires_in": raw.get("expires_in")}
 
-        auth_code = self.oauth.issue_authorization_code(
-            context["client_id"],
-            context["redirect_uri"],
-            context["scope"],
-            context.get("state"),
-            context.get("resource"),
+        return self._issue_authorization_redirect(
+            client_id=context["client_id"],
+            redirect_uri=context["redirect_uri"],
+            scope=context["scope"],
+            state=context.get("state"),
+            resource=context.get("resource"),
+            request=request,
             extra=extra,
+            message="Consent complete. You can close this tab or return to your MCP client.",
         )
-        query = {"code": auth_code}
-        if context.get("state"):
-            query["state"] = context["state"]
-        location = f"{context['redirect_uri']}?{urlencode(query)}"
-
-        html_body = textwrap.dedent(
-            f"""
-            <!doctype html>
-            <html>
-                <head><title>Authorization Complete</title></head>
-                <body>
-                    <h1>Consent Complete</h1>
-                    <p>You can close this tab. If not redirected automatically, continue here:</p>
-                    <p><a href="{location}">{location}</a></p>
-                </body>
-            </html>
-            """
-        ).strip()
-        headers = {"Location": location, "Cache-Control": "no-store"}
-        if "text/html" in request.headers.get("Accept", "text/html"):
-            return web.Response(status=302, headers=headers, text=html_body, content_type="text/html")
-        return web.Response(status=302, headers=headers)
 
     async def oauth_token(self, request: web.Request) -> web.Response:
         if request.content_type == "application/json":
