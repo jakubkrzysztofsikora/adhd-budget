@@ -317,6 +317,8 @@ class OAuthProvider:
         code_challenge: Optional[str] = None,
         code_challenge_method: Optional[str] = None,
     ) -> str:
+        if code_challenge and not code_challenge_method:
+            code_challenge_method = "S256"
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
             if _is_allowed_remote_redirect(redirect_uri):
@@ -415,13 +417,14 @@ class OAuthProvider:
                     code_verifier = payload.get("code_verifier")
                     if not code_verifier:
                         raise web.HTTPBadRequest(text="Missing code_verifier")
-                    method = (stored.get("code_challenge_method") or "plain").upper()
-                    if method == "S256":
-                        expected = base64.urlsafe_b64encode(
-                            hashlib.sha256(str(code_verifier).encode("utf-8")).digest()
-                        ).decode("ascii").rstrip("=")
-                    else:
-                        expected = str(code_verifier)
+                    if not isinstance(code_verifier, str):
+                        raise web.HTTPBadRequest(text="Invalid code_verifier")
+                    method = (stored.get("code_challenge_method") or "S256").upper()
+                    if method != "S256":
+                        raise web.HTTPBadRequest(text="Unsupported code_challenge_method")
+                    expected = base64.urlsafe_b64encode(
+                        hashlib.sha256(code_verifier.encode("utf-8")).digest()
+                    ).decode("ascii").rstrip("=")
                     if expected != code_challenge:
                         raise web.HTTPBadRequest(text="Invalid code_verifier")
                 scope = stored["scope"]

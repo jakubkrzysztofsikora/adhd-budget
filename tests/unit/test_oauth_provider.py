@@ -114,3 +114,33 @@ def test_pkce_verification_required_when_challenge_present():
         }
     )
     assert "access_token" in tokens
+
+
+def test_pkce_plain_method_is_rejected():
+    provider = OAuthProvider()
+    client = {
+        "client_id": "public-client-plain",
+        "redirect_uris": ["https://example.com/cb"],
+        "token_endpoint_auth_method": "none",
+    }
+    provider.clients[client["client_id"]] = client
+
+    code = provider.issue_authorization_code(
+        client["client_id"],
+        client["redirect_uris"][0],
+        "accounts",
+        None,
+        None,
+        code_challenge="plain-challenge",
+        code_challenge_method="plain",
+    )
+
+    with pytest.raises(web.HTTPBadRequest):
+        provider.exchange_token(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": "plain-challenge",
+                "client_id": client["client_id"],
+            }
+        )
