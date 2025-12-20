@@ -144,3 +144,23 @@ def test_pkce_plain_method_is_rejected():
                 "client_id": client["client_id"],
             }
         )
+
+
+def test_pkce_invalid_challenge_rejected():
+    provider = OAuthProvider()
+    client = {
+        "client_id": "public-client-invalid",
+        "redirect_uris": ["https://example.com/cb"],
+        "token_endpoint_auth_method": "none",
+    }
+    provider.clients[client["client_id"]] = client
+
+    with pytest.raises(web.HTTPBadRequest):
+        provider.issue_authorization_code(
+            client["client_id"],
+            client["redirect_uris"][0],
+            "accounts",
+            None,
+            None,
+            code_challenge="@@@",
+        )

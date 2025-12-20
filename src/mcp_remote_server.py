@@ -318,6 +318,13 @@ class OAuthProvider:
         code_challenge_method: Optional[str] = None,
     ) -> str:
         if code_challenge and not code_challenge_method:
+            allowed_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+            if not 43 <= len(code_challenge) <= 128 or any(ch not in allowed_chars for ch in code_challenge):
+                raise web.HTTPBadRequest(text="Invalid code_challenge format")
+            try:
+                base64.urlsafe_b64decode(code_challenge + "===")
+            except binascii.Error:
+                raise web.HTTPBadRequest(text="Invalid code_challenge format")
             code_challenge_method = "S256"
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
