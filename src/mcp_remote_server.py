@@ -34,6 +34,7 @@ import asyncio
 import base64
 import binascii
 import calendar
+import hashlib
 import json
 import logging
 import os
@@ -313,6 +314,8 @@ class OAuthProvider:
         resource: Optional[str],
         *,
         extra: Optional[Dict[str, Any]] = None,
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None,
     ) -> str:
         client = self._validate_client(client_id, None)
         if redirect_uri not in client["redirect_uris"]:
@@ -332,6 +335,8 @@ class OAuthProvider:
             "resource": resource,
             "expires_at": time.time() + 300,
             "extra": extra or {},
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
         }
         return code
 
@@ -405,6 +410,20 @@ class OAuthProvider:
 
                 resource = payload.get("resource") or stored.get("resource")
                 self._validate_resource(resource, stored.get("resource"))
+                code_challenge = stored.get("code_challenge")
+                if code_challenge:
+                    code_verifier = payload.get("code_verifier")
+                    if not code_verifier:
+                        raise web.HTTPBadRequest(text="Missing code_verifier")
+                    method = (stored.get("code_challenge_method") or "plain").upper()
+                    if method == "S256":
+                        expected = base64.urlsafe_b64encode(
+                            hashlib.sha256(str(code_verifier).encode("utf-8")).digest()
+                        ).decode("ascii").rstrip("=")
+                    else:
+                        expected = str(code_verifier)
+                    if expected != code_challenge:
+                        raise web.HTTPBadRequest(text="Invalid code_verifier")
                 scope = stored["scope"]
                 extra = stored.get("extra")
             else:
@@ -1185,7 +1204,7 @@ class MCPApplication:
             "scopes_supported": ["transactions", "accounts", "summary"],
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
-            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
             "code_challenge_methods_supported": ["S256"],
         }
         return web.json_response(metadata)
@@ -1219,6 +1238,8 @@ class MCPApplication:
         aspsp_name = params.get("aspsp_name")
         aspsp_country = params.get("aspsp_country")
         psu_type = params.get("psu_type", "personal")
+        code_challenge = params.get("code_challenge")
+        code_challenge_method = params.get("code_challenge_method")
 
         if not client_id or not redirect_uri:
             raise web.HTTPBadRequest(text="Missing client_id or redirect_uri")
@@ -1289,6 +1310,8 @@ class MCPApplication:
             "resource": resource,
             "callback_uri": callback_uri,
             "created_at": now,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
         }
 
         try:
@@ -1366,6 +1389,8 @@ class MCPApplication:
             context.get("state"),
             context.get("resource"),
             extra=extra,
+            code_challenge=context.get("code_challenge"),
+            code_challenge_method=context.get("code_challenge_method"),
         )
         query = {"code": auth_code}
         if context.get("state"):
@@ -1454,4 +1479,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
-
