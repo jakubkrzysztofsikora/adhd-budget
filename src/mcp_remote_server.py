@@ -102,6 +102,9 @@ REMOTE_REDIRECT_PREFIXES = (
 )
 
 DEFAULT_OAUTH_ISSUER = "https://auth.local.adhd-budget"
+PKCE_MIN_LENGTH = 43
+PKCE_MAX_LENGTH = 128
+PKCE_ALLOWED_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 def _external_base_url(request: web.Request) -> str:
@@ -319,12 +322,16 @@ class OAuthProvider:
     ) -> str:
         if code_challenge:
             method = (code_challenge_method or "S256").upper()
-            allowed_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-            if not 43 <= len(code_challenge) <= 128 or any(ch not in allowed_chars for ch in code_challenge):
+            if not PKCE_MIN_LENGTH <= len(code_challenge) <= PKCE_MAX_LENGTH or any(
+                ch not in PKCE_ALLOWED_CHARS for ch in code_challenge
+            ):
                 raise web.HTTPBadRequest(text="Invalid code_challenge format")
             try:
-                base64.urlsafe_b64decode(code_challenge + "===")
+                padded = code_challenge + "=" * (-len(code_challenge) % 4)
+                decoded = base64.urlsafe_b64decode(padded)
             except binascii.Error:
+                raise web.HTTPBadRequest(text="Invalid code_challenge format")
+            if len(decoded) != 32:
                 raise web.HTTPBadRequest(text="Invalid code_challenge format")
             if method != "S256":
                 raise web.HTTPBadRequest(text="Unsupported code_challenge_method")
