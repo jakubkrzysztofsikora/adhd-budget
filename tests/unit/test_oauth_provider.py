@@ -125,24 +125,15 @@ def test_pkce_plain_method_is_rejected():
     }
     provider.clients[client["client_id"]] = client
 
-    code = provider.issue_authorization_code(
-        client["client_id"],
-        client["redirect_uris"][0],
-        "accounts",
-        None,
-        None,
-        code_challenge="plain-challenge",
-        code_challenge_method="plain",
-    )
-
     with pytest.raises(web.HTTPBadRequest):
-        provider.exchange_token(
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "code_verifier": "plain-challenge",
-                "client_id": client["client_id"],
-            }
+        provider.issue_authorization_code(
+            client["client_id"],
+            client["redirect_uris"][0],
+            "accounts",
+            None,
+            None,
+            code_challenge="plain-challenge",
+            code_challenge_method="plain",
         )
 
 
