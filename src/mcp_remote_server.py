@@ -1276,6 +1276,7 @@ class MCPApplication:
         return response
 
     async def oauth_authorize(self, request: web.Request) -> web.StreamResponse:
+        allow_mock = os.getenv("ENABLE_MOCK_FALLBACK", "false").lower() in ("1", "true", "yes")
         params = request.rel_url.query
         client_id = params.get("client_id")
         redirect_uri = params.get("redirect_uri")
@@ -1338,7 +1339,38 @@ class MCPApplication:
                 ).strip()
                 return web.Response(text=html, content_type="text/html")
 
-        service = self._ensure_enable_banking()
+        def _mock_redirect() -> web.Response:
+            mock_tokens = EnableBankingTokens(
+                access_token="mock-access-token",
+                refresh_token="mock-refresh-token",
+                expires_at=time.time() + 3600,
+            )
+            extra = {
+                "enable_banking_tokens": mock_tokens.to_dict(),
+                "enable_banking_expires_in": 3600,
+            }
+            auth_code = self.oauth.issue_authorization_code(
+                client_id,
+                redirect_uri,
+                scope,
+                state,
+                resource,
+                extra=extra,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+            )
+            location = f"{redirect_uri}?code={auth_code}"
+            if state:
+                location += f"&state={state}"
+            headers = {"Location": location, "Cache-Control": "no-store"}
+            return web.Response(status=302, headers=headers)
+
+        try:
+            service = self._ensure_enable_banking()
+        except web.HTTPServiceUnavailable:
+            if not allow_mock:
+                raise
+            return _mock_redirect()
         base_url = _external_base_url(request)
         callback_uri = f"{base_url}/oauth/enable-banking/callback"
 
@@ -1369,32 +1401,11 @@ class MCPApplication:
                 aspsp_country=aspsp_country,
                 psu_type=psu_type,
             )
-        except (RuntimeError, Exception) as exc:
+        except Exception as exc:
             LOGGER.error("Enable Banking auth initiation failed: %s", exc)
-            mock_tokens = EnableBankingTokens(
-                access_token="mock-access-token",
-                refresh_token="mock-refresh-token",
-                expires_at=time.time() + 3600,
-            )
-            extra = {
-                "enable_banking_tokens": mock_tokens.to_dict(),
-                "enable_banking_expires_in": 3600,
-            }
-            auth_code = self.oauth.issue_authorization_code(
-                client_id,
-                redirect_uri,
-                scope,
-                state,
-                resource,
-                extra=extra,
-                code_challenge=code_challenge,
-                code_challenge_method=code_challenge_method,
-            )
-            location = f"{redirect_uri}?code={auth_code}"
-            if state:
-                location += f"&state={state}"
-            headers = {"Location": location, "Cache-Control": "no-store"}
-            return web.Response(status=302, headers=headers)
+            if not allow_mock:
+                raise
+            return _mock_redirect()
 
         auth_url = payload.get("url")
         if not auth_url:
