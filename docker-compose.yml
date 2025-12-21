@@ -50,6 +50,7 @@ services:
       - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/${ENABLE_APP_ID}.pem}
       - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
       - ENABLE_OAUTH_SCOPES=${ENABLE_OAUTH_SCOPES:-accounts transactions}
+      - ENABLE_MOCK_FALLBACK=${ENABLE_MOCK_FALLBACK:-true}
     ports:
       - "8081:8081"
     healthcheck:

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 
 import pytest
 from aiohttp import web
@@ -63,4 +64,94 @@ def test_apply_basic_auth_credentials_rejects_mismatched_client_id():
     with pytest.raises(web.HTTPUnauthorized):
         _apply_basic_auth_credentials(
             {"client_id": "other"}, {"Authorization": f"Basic {header}"}
+        )
+
+
+def test_pkce_verification_required_when_challenge_present():
+    provider = OAuthProvider()
+    client = {
+        "client_id": "public-client",
+        "redirect_uris": ["https://example.com/cb"],
+        "token_endpoint_auth_method": "none",
+    }
+    provider.clients[client["client_id"]] = client
+
+    verifier = "test-verifier-123"
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("utf-8")).digest()
+    ).decode("ascii").rstrip("=")
+    code = provider.issue_authorization_code(
+        client["client_id"],
+        client["redirect_uris"][0],
+        "accounts",
+        None,
+        None,
+        code_challenge=challenge,
+        code_challenge_method="S256",
+    )
+
+    with pytest.raises(web.HTTPBadRequest):
+        provider.exchange_token(
+            {"grant_type": "authorization_code", "code": code, "client_id": client["client_id"]}
+        )
+
+    code_with_verifier = provider.issue_authorization_code(
+        client["client_id"],
+        client["redirect_uris"][0],
+        "accounts",
+        None,
+        None,
+        code_challenge=challenge,
+        code_challenge_method="S256",
+    )
+
+    tokens = provider.exchange_token(
+        {
+            "grant_type": "authorization_code",
+            "code": code_with_verifier,
+            "code_verifier": verifier,
+            "client_id": client["client_id"],
+        }
+    )
+    assert "access_token" in tokens
+
+
+def test_pkce_plain_method_is_rejected():
+    provider = OAuthProvider()
+    client = {
+        "client_id": "public-client-plain",
+        "redirect_uris": ["https://example.com/cb"],
+        "token_endpoint_auth_method": "none",
+    }
+    provider.clients[client["client_id"]] = client
+
+    with pytest.raises(web.HTTPBadRequest):
+        provider.issue_authorization_code(
+            client["client_id"],
+            client["redirect_uris"][0],
+            "accounts",
+            None,
+            None,
+            code_challenge="plain-challenge",
+            code_challenge_method="plain",
+        )
+
+
+def test_pkce_invalid_challenge_rejected():
+    provider = OAuthProvider()
+    client = {
+        "client_id": "public-client-invalid",
+        "redirect_uris": ["https://example.com/cb"],
+        "token_endpoint_auth_method": "none",
+    }
+    provider.clients[client["client_id"]] = client
+
+    with pytest.raises(web.HTTPBadRequest):
+        provider.issue_authorization_code(
+            client["client_id"],
+            client["redirect_uris"][0],
+            "accounts",
+            None,
+            None,
+            code_challenge="@@@",
         )

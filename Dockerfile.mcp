@@ -12,7 +12,7 @@ RUN adduser -D -u 1000 mcpuser
 # Create app and log directories
 WORKDIR /app
 RUN mkdir -p /var/log/mcp && chown mcpuser:mcpuser /var/log/mcp
-COPY --chown=mcpuser:mcpuser src/ /app/
+COPY --chown=mcpuser:mcpuser src/ /app/src/
 
 # Switch to non-root user
 USER mcpuser
@@ -22,4 +22,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8081/health || exit 1
 
 # Start the server
-CMD ["python", "/app/mcp_remote_server.py"]
+CMD ["python", "-m", "src.mcp_remote_server"]
