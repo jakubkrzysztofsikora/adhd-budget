@@ -1369,7 +1369,7 @@ class MCPApplication:
                 aspsp_country=aspsp_country,
                 psu_type=psu_type,
             )
-        except RuntimeError as exc:
+        except (RuntimeError, Exception) as exc:
             LOGGER.error("Enable Banking auth initiation failed: %s", exc)
             mock_tokens = EnableBankingTokens(
                 access_token="mock-access-token",
