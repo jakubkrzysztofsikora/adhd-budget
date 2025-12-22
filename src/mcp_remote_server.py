@@ -910,6 +910,7 @@ class MCPApplication:
                 {
                     "name": name,
                     "description": definition.description,
+                    "input_schema": definition.input_schema,
                     "inputSchema": definition.input_schema,
                 }
             )
