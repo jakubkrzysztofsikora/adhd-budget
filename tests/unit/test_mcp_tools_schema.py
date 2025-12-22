@@ -4,7 +4,7 @@ import requests
 
 
 def _base_url() -> str:
-    return (os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8081").rstrip("/")
+    return (os.getenv("TEST_BASE_URL") or os.getenv("MCP_URL") or "http://127.0.0.1:8081").rstrip("/")
 
 
 def test_tools_list_exposes_snake_case_input_schema():
