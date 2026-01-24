@@ -609,7 +609,7 @@ class MCPFastAPIServer:
         """Setup CORS middleware."""
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=ALLOWED_ORIGINS + ["*"],  # Allow all for development
+            allow_origins=ALLOWED_ORIGINS,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
