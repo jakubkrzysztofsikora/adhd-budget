@@ -22,7 +22,7 @@ PROTOCOL_VERSION = "2025-06-18"
 def _proxy_base_url() -> str:
     configured = os.getenv("PROXY_URL")
     if not configured:
-        configured = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8000"
+        configured = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8081"
     return configured.rstrip("/")
 
 
@@ -65,7 +65,7 @@ class TestT4MCPStreaming:
             try:
                 socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
             except socket.gaierror:
-                fallback = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8000"
+                fallback = os.getenv("TEST_BASE_URL") or "http://127.0.0.1:8081"
                 return fallback.rstrip("/")
 
         return configured.rstrip("/")
@@ -224,7 +224,8 @@ class TestT4MCPStreaming:
 
         try:
             assert response.status_code == 200
-            assert response.headers.get("Content-Type") == "text/event-stream"
+            content_type = response.headers.get("Content-Type", "")
+            assert content_type.startswith("text/event-stream"), f"Expected text/event-stream, got {content_type}"
 
             chunks_with_timing = []
             start_time = time.time()

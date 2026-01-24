@@ -69,8 +69,8 @@ Claude Desktop/Web Connectors consume these tools via OAuth-authenticated MCP se
 
 ### Connector configuration
 - **Claude Desktop/Web (remote)**: Point Claude to your HTTPS deployment (for example `https://mcp.example.com`). Claude fetches `/.well-known/mcp.json` (respecting forwarded headers), registers a client with the appropriate redirect variant, and walks through OAuth automatically with a direct 302 back to Claude.
-- **Claude Desktop (local relay)**: During development you can still rely on `npx mcp-remote http://127.0.0.1:8000/mcp` to expose the streamable HTTP endpoint locally.
-- **ChatGPT Developer Mode**: Settings → Connectors → Advanced → Developer Mode → Add your HTTPS endpoint (or `http://127.0.0.1:8000/mcp` for local testing). The MCP server recognises the full set of ChatGPT redirects (see `DEFAULT_REMOTE_REDIRECT_URIS`) and sends a direct 302 back to the requested callback, eliminating the "invalid redirect" error.
+- **Claude Desktop (local relay)**: During development you can still rely on `npx mcp-remote http://127.0.0.1:8081/mcp` to expose the streamable HTTP endpoint locally.
+- **ChatGPT Developer Mode**: Settings → Connectors → Advanced → Developer Mode → Add your HTTPS endpoint (or `http://127.0.0.1:8081/mcp` for local testing). The MCP server recognises the full set of ChatGPT redirects (see `DEFAULT_REMOTE_REDIRECT_URIS`) and sends a direct 302 back to the requested callback, eliminating the "invalid redirect" error.
 
 ## 3. Iterative Roadmap
 

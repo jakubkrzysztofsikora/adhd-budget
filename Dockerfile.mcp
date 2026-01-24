@@ -4,7 +4,8 @@ FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b06
 RUN apk add --no-cache postgresql-dev gcc musl-dev wget
 
 # Install Python dependencies as root
-RUN pip install --no-cache-dir aiohttp requests cryptography PyJWT psycopg2
+RUN pip install --no-cache-dir aiohttp requests cryptography PyJWT psycopg2 \
+    fastapi uvicorn[standard] python-multipart starlette
 
 # Create non-root user
 RUN adduser -D -u 1000 mcpuser
@@ -21,5 +22,5 @@ USER mcpuser
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8081/health || exit 1
 
-# Start the server
-CMD ["python", "-m", "src.mcp_remote_server"]
+# Start the FastAPI MCP server
+CMD ["python", "-m", "uvicorn", "src.mcp_fastapi_server:app", "--host", "0.0.0.0", "--port", "8081"]

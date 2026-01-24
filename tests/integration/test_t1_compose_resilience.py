@@ -103,7 +103,7 @@ class TestT1ComposeResilience:
                 except Exception as exc:  # pragma: no cover - diagnostic only
                     pytest.fail(f"Service {host}:{port} not reachable: {exc}")
         elif not getattr(self, "docker_available", False):
-            base_url = os.getenv("TEST_BASE_URL", "http://127.0.0.1:8000")
+            base_url = os.getenv("TEST_BASE_URL", "http://127.0.0.1:8081")
             response = requests.get(f"{base_url}/health", timeout=5)
             assert response.status_code == 200
         else:
