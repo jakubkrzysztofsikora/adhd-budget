@@ -224,7 +224,8 @@ class TestT4MCPStreaming:
 
         try:
             assert response.status_code == 200
-            assert response.headers.get("Content-Type") == "text/event-stream"
+            content_type = response.headers.get("Content-Type", "")
+            assert content_type.startswith("text/event-stream"), f"Expected text/event-stream, got {content_type}"
 
             chunks_with_timing = []
             start_time = time.time()

@@ -992,10 +992,10 @@ class MCPFastAPIServer:
         session_id = request.headers.get("Mcp-Session-Id")
         session = await self.sessions.get(session_id)
         if not session:
-            # Allow tools/list without session for compatibility
-            if method == "tools/list":
+            # Allow tools/list and tools/call without session for compatibility
+            if method in ("tools/list", "tools/call"):
                 session = Session(
-                    id="legacy-tools-list",
+                    id="legacy-session",
                     protocol_version=protocol_version or DEFAULT_PROTOCOL_VERSION,
                     client_info={"name": "legacy-client", "version": "unknown"},
                 )
