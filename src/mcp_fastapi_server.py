@@ -1099,7 +1099,7 @@ class MCPFastAPIServer:
             tools.append({
                 "name": name,
                 "description": definition.description,
-                "inputSchema": definition.input_schema,
+                "input_schema": definition.input_schema,
             })
         return {"tools": tools}
 

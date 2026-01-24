@@ -45,9 +45,9 @@ services:
       - DB_USER=budget_user
       - DB_PASSWORD=${DB_PASSWORD}
       - ENABLE_ENV=${ENABLE_ENV:-sandbox}
-      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
-      - ENABLE_APP_ID=${ENABLE_APP_ID}
-      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/${ENABLE_APP_ID}.pem}
+      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.sandbox.enablebanking.com}
+      - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
+      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
       - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
       - ENABLE_OAUTH_SCOPES=${ENABLE_OAUTH_SCOPES:-accounts transactions}
       - ENABLE_MOCK_FALLBACK=${ENABLE_MOCK_FALLBACK:-true}
@@ -105,7 +105,7 @@ services:
       - ./src:/app
     environment:
       - API_PORT=8082
-      - API_AUTH_TOKEN=${API_TOKEN}
+      - API_AUTH_TOKEN=${API_TOKEN:-api-secret}
     ports:
       - "8082:8082"
     healthcheck:
