@@ -733,8 +733,8 @@ class MCPFastAPIServer:
                             payload["client_id"] = basic_id
                         if not payload.get("client_secret"):
                             payload["client_secret"] = basic_secret
-                except Exception:
-                    pass
+                except (binascii.Error, UnicodeDecodeError):
+                    raise HTTPException(status_code=401, detail="Invalid client authentication")
 
             tokens = self.oauth.exchange_token(payload)
             return JSONResponse(content=tokens)
