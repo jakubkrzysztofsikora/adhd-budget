@@ -5,11 +5,11 @@ import asyncio
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Generator
 
 import pytest
-from aiohttp import web
 
 
 # Ensure the repository root (which contains the ``src`` package) is importable.
@@ -25,7 +25,7 @@ def launch_mcp_server() -> Generator[None, None, None]:
     The heavier integration suites normally exercise the stack through Docker
     Compose.  When those services are unavailable (for example in constrained
     CI environments) we still want deterministic coverage, so this fixture
-    boots ``src.mcp_remote_server`` on ``127.0.0.1`` and wires the relevant
+    boots the FastAPI MCP server on ``127.0.0.1`` and wires the relevant
     environment variables to point at it.
     """
 
@@ -35,45 +35,52 @@ def launch_mcp_server() -> Generator[None, None, None]:
         yield
         return
 
-    from src.mcp_remote_server import create_app
+    # Use the new FastAPI server
+    import uvicorn
+    from src.mcp_fastapi_server import create_app
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(None)
+    # Find an available port
+    import socket
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
 
-    ready = threading.Event()
+    base_url = f"http://127.0.0.1:{port}"
+    os.environ["TEST_BASE_URL"] = base_url
+    os.environ["PROXY_URL"] = base_url
+    os.environ["API_URL"] = base_url
+    os.environ["MCP_URL"] = base_url
+    os.environ["MCP_HOST"] = "127.0.0.1"
+    os.environ["MCP_PORT"] = str(port)
 
-    def _run() -> None:
-        asyncio.set_event_loop(loop)
-        app = create_app()
-        runner = web.AppRunner(app)
-        loop.run_until_complete(runner.setup())
-        site = web.TCPSite(runner, host="127.0.0.1", port=0)
-        loop.run_until_complete(site.start())
-        sockets = site._server.sockets  # type: ignore[attr-defined]
-        assert sockets, "aiohttp site did not expose any sockets"
-        port = sockets[0].getsockname()[1]
-        base_url = f"http://127.0.0.1:{port}"
-        os.environ["TEST_BASE_URL"] = base_url
-        os.environ["PROXY_URL"] = base_url
-        os.environ["API_URL"] = base_url
-        os.environ["MCP_URL"] = base_url
-        os.environ["MCP_HOST"] = "127.0.0.1"
-        os.environ["MCP_PORT"] = str(port)
-        ready.set()
-        try:
-            loop.run_forever()
-        finally:
-            loop.run_until_complete(runner.cleanup())
-            loop.close()
+    app = create_app()
+    config = uvicorn.Config(
+        app=app,
+        host="127.0.0.1",
+        port=port,
+        log_level="error",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
 
-    thread = threading.Thread(target=_run, name="mcp-test-server", daemon=True)
+    def run_server():
+        asyncio.run(server.serve())
+
+    thread = threading.Thread(target=run_server, name="mcp-test-server", daemon=True)
     thread.start()
-    if not ready.wait(timeout=10):
-        raise RuntimeError("Timed out starting MCP test server")
+
+    # Wait for server to be ready
+    import requests
+    for _ in range(50):  # 5 seconds total
+        try:
+            requests.get(f"{base_url}/health", timeout=1)
+            break
+        except Exception:
+            time.sleep(0.1)
 
     try:
         yield
     finally:
-        if loop.is_running():
-            loop.call_soon_threadsafe(loop.stop)
+        server.should_exit = True
         thread.join(timeout=5)
