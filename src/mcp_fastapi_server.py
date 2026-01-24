@@ -1474,7 +1474,7 @@ app = create_app()
 def main() -> None:
     """Run the server."""
     host = os.getenv("MCP_HOST", "0.0.0.0")
-    port = int(os.getenv("MCP_PORT", "8000"))
+    port = int(os.getenv("MCP_PORT", "8081"))
     uvicorn.run(app, host=host, port=port)
 
 
