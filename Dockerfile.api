@@ -1,7 +1,9 @@
 FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
 
-# Install PyJWT for token validation
-RUN pip install --no-cache-dir pyjwt
+# Install build dependencies and PyJWT for token validation
+RUN apk add --no-cache gcc musl-dev libffi-dev && \
+    pip install --no-cache-dir pyjwt && \
+    apk del gcc musl-dev libffi-dev
 
 WORKDIR /app
 
