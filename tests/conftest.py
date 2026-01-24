@@ -72,12 +72,19 @@ def launch_mcp_server() -> Generator[None, None, None]:
 
     # Wait for server to be ready
     import requests
+    server_ready = False
     for _ in range(50):  # 5 seconds total
         try:
             requests.get(f"{base_url}/health", timeout=1)
+            server_ready = True
             break
-        except Exception:
+        except (requests.ConnectionError, requests.Timeout):
             time.sleep(0.1)
+    
+    if not server_ready:
+        server.should_exit = True
+        thread.join(timeout=2)
+        raise RuntimeError(f"MCP test server failed to start on {base_url}")
 
     try:
         yield
