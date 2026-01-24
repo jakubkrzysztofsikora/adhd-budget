@@ -272,8 +272,18 @@ class OAuthProvider:
     ) -> str:
         if code_challenge:
             method = (code_challenge_method or "S256").upper()
-            if not PKCE_MIN_LENGTH <= len(code_challenge) <= PKCE_MAX_LENGTH:
+            if not PKCE_MIN_LENGTH <= len(code_challenge) <= PKCE_MAX_LENGTH or any(
+                ch not in PKCE_ALLOWED_CHARS for ch in code_challenge
+            ):
                 raise HTTPException(status_code=400, detail="Invalid code_challenge format")
+            try:
+                padded = code_challenge + "=" * (-len(code_challenge) % 4)
+                decoded = base64.urlsafe_b64decode(padded)
+            except binascii.Error:
+                raise HTTPException(status_code=400, detail="Invalid code_challenge format")
+            if len(decoded) != 32:
+                raise HTTPException(status_code=400, detail="Invalid code_challenge format")
+
             if method != "S256":
                 raise HTTPException(status_code=400, detail="Unsupported code_challenge_method")
             code_challenge_method = method
