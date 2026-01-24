@@ -41,7 +41,7 @@ docker compose ps
 
 - **Main App:** http://localhost
 - **API:** http://localhost:8082
-- **MCP Server:** http://localhost:8000/mcp (streamable HTTP)
+- **MCP Server:** http://localhost:8081/mcp (streamable HTTP)
 - **OAuth Flow:** http://localhost/oauth/authorize
 - **MCP Inspector:** http://localhost:6274 (development)
 - **Log Viewer:** http://localhost:8888 (MCP server logs with mTLS)
@@ -57,18 +57,18 @@ origin allow lists and requires OAuth 2.1 bearer tokens for protected tools.
 
 ```bash
 python src/mcp_remote_server.py
-# Server listens on http://127.0.0.1:8000/mcp
+# Server listens on http://127.0.0.1:8081/mcp
 ```
 
 Set ``MCP_PORT`` and ``MCP_HOST`` to override the bind address. For example,
 Docker Compose sets ``MCP_PORT=8081`` and ``MCP_HOST=0.0.0.0`` so that other
-containers and the reverse proxy can reach the service while local execution
-continues to default to ``127.0.0.1`` for safety.
+containers and the reverse proxy can reach the service. The default port is
+8081 for consistency with the Docker environment.
 
 ### Test the handshake
 
 ```bash
-curl -X POST http://127.0.0.1:8000/mcp \
+curl -X POST http://127.0.0.1:8081/mcp \
   -H "Content-Type: application/json" \
   -H "MCP-Protocol-Version: 2025-06-18" \
   -d '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"0.1.0"}}}'
@@ -78,7 +78,7 @@ Use the ``Mcp-Session-Id`` response header for subsequent POST requests and
 the SSE stream:
 
 ```bash
-curl -N http://127.0.0.1:8000/mcp \
+curl -N http://127.0.0.1:8081/mcp \
   -H "Accept: text/event-stream" \
   -H "Mcp-Session-Id: <session-id>" \
   -H "MCP-Protocol-Version: 2025-06-18"
@@ -241,7 +241,7 @@ python3 tests/e2e/test_deployed_instance.py
 # 2. Test with MCP Inspector or Claude Desktop
 ./setup_mcp_inspector.sh
 # Configure Inspector or Claude Desktop with the streamable HTTP transport:
-#   http://127.0.0.1:8000/mcp
+#   http://127.0.0.1:8081/mcp
 # Add the OAuth client via /oauth/register and complete the authorization code flow.
 
 # 3. Verify authenticated endpoints
