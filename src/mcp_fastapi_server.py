@@ -89,12 +89,18 @@ ALLOWED_ORIGINS = [
 
 # Remote redirect URIs for Claude/ChatGPT
 DEFAULT_REMOTE_REDIRECT_URIS = (
+    # Claude.ai callback URLs
     "https://www.claude.ai/api/auth/callback",
     "https://claude.ai/api/auth/callback",
     "https://claude.ai/api/mcp/auth_callback",
     "https://www.claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",  # Future Claude URL
     "https://app.claude.ai/api/auth/callback",
     "https://lite.claude.ai/api/auth/callback",
+    # ChatGPT/OpenAI callback URLs - CRITICAL: This is the official one!
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    "https://www.chatgpt.com/connector_platform_oauth_redirect",
+    "https://platform.openai.com/apps-manage/oauth",  # Review callback
     "https://chat.openai.com/aip/api/auth/callback",
     "https://chat.openai.com/api/auth/callback",
     "https://chat.openai.com/backend-api/mcp/callback",
@@ -616,6 +622,20 @@ class MCPFastAPIServer:
             expose_headers=["Mcp-Session-Id", "MCP-Protocol-Version"],
         )
 
+        # Exception handler for 401 responses - adds WWW-Authenticate per MCP/RFC9728 spec
+        @self.app.exception_handler(HTTPException)
+        async def http_exception_handler(request: Request, exc: HTTPException):
+            headers = dict(exc.headers) if exc.headers else {}
+            if exc.status_code == 401:
+                # Per MCP spec: include WWW-Authenticate header pointing to protected resource metadata
+                base_url = _external_base_url(request)
+                headers["WWW-Authenticate"] = f'Bearer resource_metadata="{base_url}/.well-known/oauth-protected-resource"'
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": exc.detail},
+                headers=headers,
+            )
+
     def _setup_routes(self) -> None:
         """Setup all routes."""
         # Health check
@@ -647,14 +667,15 @@ class MCPFastAPIServer:
                     "token_endpoint": f"{base_url}/oauth/token",
                     "registration_endpoint": f"{base_url}/oauth/register",
                     "revocation_endpoint": f"{base_url}/oauth/revoke",
-                    "scopes": ["transactions", "accounts", "summary"],
-                    "resource": f"{base_url}/mcp",
+                    "scopes": ["transactions", "accounts", "summary", "offline_access"],
+                    "resource": base_url,
                 },
             }
 
         # OAuth metadata endpoints
         @self.app.get("/.well-known/oauth-authorization-server")
         async def oauth_metadata(request: Request):
+            """RFC 8414 OAuth Authorization Server Metadata."""
             base_url = _external_base_url(request)
             issuer = os.getenv("OAUTH_ISSUER") or base_url
             self.oauth.issuer = issuer
@@ -664,24 +685,28 @@ class MCPFastAPIServer:
                 "token_endpoint": f"{base_url}/oauth/token",
                 "revocation_endpoint": f"{base_url}/oauth/revoke",
                 "registration_endpoint": f"{base_url}/oauth/register",
-                "scopes_supported": ["transactions", "accounts", "summary"],
+                "scopes_supported": ["transactions", "accounts", "summary", "offline_access"],
                 "response_types_supported": ["code"],
                 "grant_types_supported": ["authorization_code", "refresh_token"],
-                "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+                "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
                 "code_challenge_methods_supported": ["S256"],
+                "service_documentation": f"{base_url}/docs",
             }
 
         @self.app.get("/.well-known/oauth-protected-resource")
         async def oauth_protected_resource(request: Request):
+            """RFC 9728 Protected Resource Metadata."""
             base_url = _external_base_url(request)
             issuer = os.getenv("OAUTH_ISSUER") or base_url
             self.oauth.issuer = issuer
-            metadata = {
-                "resource": f"{base_url}/mcp",
-                "authorization_server": issuer,
+            # Return RFC 9728 compliant format (no wrapping)
+            return {
+                "resource": base_url,
                 "authorization_servers": [issuer],
+                "scopes_supported": ["transactions", "accounts", "offline_access"],
+                "bearer_methods_supported": ["header"],
+                "resource_documentation": f"{base_url}/docs",
             }
-            return {"protectedResourceMetadata": metadata, **metadata}
 
         # OAuth endpoints
         @self.app.post("/oauth/register")
