@@ -1111,7 +1111,7 @@ class MCPFastAPIServer:
             },
             "serverInfo": {"name": "adhd-budget-mcp", "version": "2.0.0"},
             "protectedResourceMetadata": {
-                "resource": f"{base_url}/mcp",
+                "resource": base_url,  # Must match /.well-known/oauth-protected-resource
                 "authorization_servers": [self.oauth.issuer],
             },
         }
