@@ -1102,6 +1102,10 @@ class MCPFastAPIServer:
         )
 
         base_url = _external_base_url(request)
+        # Update OAuth issuer based on request URL (same logic as .well-known endpoints)
+        issuer = os.getenv("OAUTH_ISSUER") or base_url
+        self.oauth.issuer = issuer
+
         result = {
             "protocolVersion": requested_version,
             "capabilities": {
@@ -1112,7 +1116,7 @@ class MCPFastAPIServer:
             "serverInfo": {"name": "adhd-budget-mcp", "version": "2.0.0"},
             "protectedResourceMetadata": {
                 "resource": base_url,  # Must match /.well-known/oauth-protected-resource
-                "authorization_servers": [self.oauth.issuer],
+                "authorization_servers": [issuer],
             },
         }
         return result, session
