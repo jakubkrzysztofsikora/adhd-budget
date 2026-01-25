@@ -643,6 +643,24 @@ class MCPFastAPIServer:
         async def health():
             return {"status": "ok"}
 
+        @self.app.get("/health/debug")
+        async def health_debug():
+            """Debug endpoint to check Enable Banking configuration."""
+            eb_status = {
+                "enable_banking_available": self.enable_banking is not None,
+                "enable_banking_configured": self.enable_banking.is_configured if self.enable_banking else False,
+                "enable_app_id": os.getenv("ENABLE_APP_ID", "NOT_SET")[:8] + "..." if os.getenv("ENABLE_APP_ID") else "NOT_SET",
+                "enable_private_key_path": os.getenv("ENABLE_PRIVATE_KEY_PATH", "NOT_SET"),
+                "enable_env": os.getenv("ENABLE_ENV", "NOT_SET"),
+                "enable_mock_fallback": os.getenv("ENABLE_MOCK_FALLBACK", "true"),
+            }
+            # Check if key file exists
+            key_path = os.getenv("ENABLE_PRIVATE_KEY_PATH")
+            if key_path:
+                import os.path
+                eb_status["private_key_exists"] = os.path.isfile(key_path)
+            return eb_status
+
         # MCP manifest
         @self.app.get("/.well-known/mcp.json")
         async def mcp_manifest(request: Request):
