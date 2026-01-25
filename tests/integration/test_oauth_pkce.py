@@ -263,10 +263,10 @@ class TestOAuthPKCE:
         assert response.status_code == 200
         data = response.json()
 
-        # Required fields
+        # Required fields per RFC 9728
         assert 'resource' in data
-        assert 'authorization_server' in data
-        assert data['resource'].endswith('/mcp')
+        assert 'authorization_servers' in data  # RFC 9728 uses plural
+        assert 'scopes_supported' in data
 
     def test_manifest_discovery(self):
         """Remote clients should discover metadata via /.well-known/mcp.json."""
@@ -295,7 +295,9 @@ class TestOAuthPKCE:
             f"{base_url}/.well-known/oauth-protected-resource",
             headers=headers,
         ).json()
-        assert protected_meta['protectedResourceMetadata']['resource'] == 'https://mcp.example.com/mcp'
+        # RFC 9728 format - no wrapper, resource is the base URL
+        assert protected_meta['resource'] == 'https://mcp.example.com'
+        assert 'authorization_servers' in protected_meta
 
     def test_mcp_with_oauth_token(self):
         """Test MCP endpoint accepts OAuth Bearer token"""
