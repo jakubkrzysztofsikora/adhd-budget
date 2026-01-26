@@ -503,17 +503,20 @@ class MCPFastAPIServer:
         self.enable_banking = None
 
         # Try lazy import of Enable Banking (may fail if cryptography unavailable)
+        self._enable_banking_error: Optional[str] = None
         if EnableBankingService is None:
             try:
                 from enable_banking_service import EnableBankingService as _EBS
                 EnableBankingService = _EBS
-            except Exception:
-                LOGGER.info("Enable Banking not available - running in mock mode")
+            except Exception as e:
+                self._enable_banking_error = str(e)
+                LOGGER.warning("Enable Banking import failed: %s", e)
 
         if EnableBankingService is not None:
             try:
                 self.enable_banking = EnableBankingService.from_environment()
             except Exception as e:
+                self._enable_banking_error = str(e)
                 LOGGER.warning("Failed to initialize Enable Banking service: %s", e)
         self.pending_enable_banking: Dict[str, Dict[str, Any]] = {}
 
@@ -649,6 +652,7 @@ class MCPFastAPIServer:
             eb_status = {
                 "enable_banking_available": self.enable_banking is not None,
                 "enable_banking_configured": self.enable_banking.is_configured if self.enable_banking else False,
+                "enable_banking_error": self._enable_banking_error,
                 "enable_app_id": os.getenv("ENABLE_APP_ID", "NOT_SET")[:8] + "..." if os.getenv("ENABLE_APP_ID") else "NOT_SET",
                 "enable_private_key_path": os.getenv("ENABLE_PRIVATE_KEY_PATH", "NOT_SET"),
                 "enable_env": os.getenv("ENABLE_ENV", "NOT_SET"),
