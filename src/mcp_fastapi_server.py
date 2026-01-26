@@ -935,7 +935,9 @@ class MCPFastAPIServer:
             raise HTTPException(status_code=503, detail="Enable Banking auth initiation failed")
 
         auth_url = payload.get("url")
+        LOGGER.info("Enable Banking initiate_auth returned: %s", payload)
         if not auth_url:
+            self._enable_banking_error = f"No auth URL returned. Payload: {payload}"
             if allow_mock:
                 return _mock_redirect()
             raise HTTPException(status_code=503, detail="Enable Banking did not return an authorization URL")
