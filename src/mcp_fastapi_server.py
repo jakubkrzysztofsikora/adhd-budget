@@ -657,7 +657,6 @@ class MCPFastAPIServer:
             # Check if key file exists
             key_path = os.getenv("ENABLE_PRIVATE_KEY_PATH")
             if key_path:
-                import os.path
                 eb_status["private_key_exists"] = os.path.isfile(key_path)
             return eb_status
 
