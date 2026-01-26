@@ -506,7 +506,7 @@ class MCPFastAPIServer:
         self._enable_banking_error: Optional[str] = None
         if EnableBankingService is None:
             try:
-                from enable_banking_service import EnableBankingService as _EBS
+                from .enable_banking_service import EnableBankingService as _EBS
                 EnableBankingService = _EBS
             except Exception as e:
                 self._enable_banking_error = str(e)
