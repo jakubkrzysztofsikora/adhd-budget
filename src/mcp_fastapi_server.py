@@ -929,6 +929,7 @@ class MCPFastAPIServer:
             )
         except Exception as exc:
             LOGGER.error("Enable Banking auth initiation failed: %s", exc)
+            self._enable_banking_error = f"Auth initiation failed: {exc}"
             if allow_mock:
                 return _mock_redirect()
             raise HTTPException(status_code=503, detail="Enable Banking auth initiation failed")
