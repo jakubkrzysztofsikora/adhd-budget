@@ -29,8 +29,7 @@ RUN pip install --no-cache-dir \
     pyyaml \
     pyjwt \
     cryptography \
-    pg8000 \
-    playwright
+    pg8000
 
 WORKDIR /app
 
