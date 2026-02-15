@@ -100,6 +100,8 @@ DEFAULT_REMOTE_REDIRECT_URIS = (
     # ChatGPT/OpenAI callback URLs - CRITICAL: This is the official one!
     "https://chatgpt.com/connector_platform_oauth_redirect",
     "https://www.chatgpt.com/connector_platform_oauth_redirect",
+    "https://chatgpt.com/oauth/callback",
+    "https://chat.openai.com/oauth/callback",
     "https://platform.openai.com/apps-manage/oauth",  # Review callback
     "https://chat.openai.com/aip/api/auth/callback",
     "https://chat.openai.com/api/auth/callback",
@@ -114,12 +116,15 @@ DEFAULT_REMOTE_REDIRECT_URIS = (
 REMOTE_REDIRECT_PREFIXES = (
     "https://claude.ai/",
     "https://www.claude.ai/",
+    "https://claude.com/",
+    "https://www.claude.com/",
     "https://app.claude.ai/",
     "https://lite.claude.ai/",
     "https://chat.openai.com/",
     "https://www.chat.openai.com/",
     "https://chatgpt.com/",
     "https://www.chatgpt.com/",
+    "https://platform.openai.com/",
 )
 
 # PKCE constants
@@ -1069,7 +1074,11 @@ class MCPFastAPIServer:
             return JSONResponse(content={"jsonrpc": "2.0", "id": request_id, "result": result})
 
         except HTTPException as exc:
-            return self._jsonrpc_error(request_id, -32000, exc.detail, status=exc.status_code)
+            headers = None
+            if exc.status_code == 401:
+                base_url = _external_base_url(request)
+                headers = {"WWW-Authenticate": f'Bearer resource_metadata="{base_url}/.well-known/oauth-protected-resource"'}
+            return self._jsonrpc_error(request_id, -32000, exc.detail, status=exc.status_code, headers=headers)
         except Exception as exc:
             LOGGER.exception("Unhandled MCP error")
             return self._jsonrpc_error(request_id, -32603, f"Internal error: {exc}")
@@ -1198,11 +1207,12 @@ class MCPFastAPIServer:
         else:
             raise HTTPException(status_code=400, detail=f"Tool not implemented: {name}")
 
-    def _jsonrpc_error(self, request_id: Any, code: int, message: str, *, status: int = 200) -> JSONResponse:
+    def _jsonrpc_error(self, request_id: Any, code: int, message: str, *, status: int = 200, headers: Optional[Dict[str, str]] = None) -> JSONResponse:
         """Create a JSON-RPC error response."""
         return JSONResponse(
             content={"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}},
-            status_code=status
+            status_code=status,
+            headers=headers,
         )
 
     def _get_enable_banking_tokens(self, token_info: Optional[Dict[str, Any]]) -> EnableBankingTokens:
