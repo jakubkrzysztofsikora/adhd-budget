@@ -65,7 +65,7 @@ class EnableBankingTokens:
 LOGGER = logging.getLogger("adhd_budget.mcp.fastapi")
 
 # Protocol versions
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 DEFAULT_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
 # CORS allowed origins
@@ -507,6 +507,9 @@ class MCPFastAPIServer:
         self.oauth = OAuthProvider()
         self.enable_banking = None
 
+        # Setup enhanced logging with file output
+        self._setup_logging()
+
         # Try lazy import of Enable Banking (may fail if cryptography unavailable)
         self._enable_banking_error: Optional[str] = None
         if EnableBankingService is None:
@@ -619,6 +622,64 @@ class MCPFastAPIServer:
         self._setup_routes()
         self._setup_middleware()
 
+    def _setup_logging(self) -> None:
+        """Setup comprehensive logging with file output and request/response logging."""
+        import logging.handlers
+
+        log_dir = os.getenv("LOG_DIR", "/var/log/mcp")
+        os.makedirs(log_dir, exist_ok=True)
+
+        # Create rotating file handler for detailed logs
+        file_handler = logging.handlers.RotatingFileHandler(
+            os.path.join(log_dir, "mcp_server.log"),
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        file_handler.setFormatter(file_formatter)
+
+        # Add file handler to root logger
+        logging.getLogger().addHandler(file_handler)
+
+        # Add request/response logging middleware
+        @self.app.middleware("http")
+        async def log_requests(request: Request, call_next):
+            # Log incoming request
+            body = None
+            if request.method in ("POST", "PUT", "PATCH"):
+                try:
+                    body = await request.body()
+                    # Re-create request with body for downstream handlers
+                    async def receive():
+                        return {"type": "http.request", "body": body}
+                    request._receive = receive
+                except:
+                    pass
+
+            LOGGER.info(
+                "Request: %s %s | Headers: %s | Body: %s",
+                request.method,
+                request.url.path,
+                dict(request.headers),
+                body[:500].decode() if body else None
+            )
+
+            # Process request
+            response = await call_next(request)
+
+            # Log response
+            LOGGER.info(
+                "Response: %s %s | Status: %d",
+                request.method,
+                request.url.path,
+                response.status_code
+            )
+
+            return response
+
     def _setup_middleware(self) -> None:
         """Setup CORS middleware."""
         self.app.add_middleware(
@@ -646,8 +707,9 @@ class MCPFastAPIServer:
 
     def _setup_routes(self) -> None:
         """Setup all routes."""
-        # Health check
+        # Health check (supports both GET and HEAD)
         @self.app.get("/health")
+        @self.app.head("/health")
         async def health():
             return {"status": "ok"}
 

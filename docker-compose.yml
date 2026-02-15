@@ -45,7 +45,7 @@ services:
       - DB_USER=budget_user
       - DB_PASSWORD=${DB_PASSWORD}
       - ENABLE_ENV=${ENABLE_ENV:-sandbox}
-      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.sandbox.enablebanking.com}
+      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
       - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
       - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
       - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
@@ -80,7 +80,7 @@ services:
     environment:
       - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
       - ENABLE_ENV=${ENABLE_ENV:-sandbox}
-      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.sandbox.enablebanking.com}
+      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
       - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
       - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
       - DB_HOST=db
