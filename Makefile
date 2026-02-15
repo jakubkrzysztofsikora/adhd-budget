@@ -1,7 +1,7 @@
 # ADHD Budget Assistant - Test Harness Makefile
 # Gates: T1-T5 (Technical), S1-S4 (Security)
 
-.PHONY: help up down test test-unit test-integration test-e2e audit-security coverage reports clean
+.PHONY: help up down test test-unit test-integration test-e2e test-e2e-browser audit-security coverage reports clean
 
 # Variables
 PYTHON := python3
@@ -98,6 +98,12 @@ test-e2e: ## Run end-to-end tests
 	@$(PYTHON) -m pytest $(TEST_DIR)/e2e/ -v --tb=short --timeout=300 \
 		--junitxml=$(REPORT_DIR)/e2e-results.xml \
 		|| (echo "$(YELLOW)E2E tests incomplete$(NC)" && true)
+
+test-e2e-browser: ## Run browser-based E2E OAuth flow tests
+	@echo ""
+	@echo "$(GREEN)Running Browser E2E Tests...$(NC)"
+	@echo "============================"
+	@$(PYTHON) -m pytest $(TEST_DIR)/e2e/test_oauth_browser_flow.py -v --tb=short --timeout=120
 
 test-load: ## Run load/performance tests
 	@echo ""
