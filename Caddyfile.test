@@ -1,8 +1,12 @@
 # Caddy test configuration - HTTP only for testing
 :80 {
-    # Health endpoint
-    handle /health {
-        respond "OK" 200
+    # Health endpoints - proxy to MCP server
+    handle /health* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
     }
 
     # MCP Server with SSE support
@@ -10,11 +14,15 @@
         reverse_proxy mcp-server:8081 {
             # Disable buffering for SSE
             flush_interval -1
-            
+
             # Headers for SSE
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
             header_down X-Accel-Buffering no
+
+            # Forwarding headers for URL generation
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
     
@@ -36,20 +44,23 @@
         reverse_proxy mcp-server:8081 {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
-    
+
     handle /oauth* {
         reverse_proxy mcp-server:8081 {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
-    
+
     handle /auth* {
         reverse_proxy mcp-server:8081 {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
         }
     }
 

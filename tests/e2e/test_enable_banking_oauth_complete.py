@@ -300,8 +300,10 @@ class TestEnableBankingOAuthComplete:
             timeout=5,
         )
         assert protected_resource.status_code == 200
-        metadata = protected_resource.json().get("protectedResourceMetadata", {})
-        assert metadata.get("resource") == f"{base_url}/mcp"
+        # RFC 9728 format - direct metadata, no wrapper
+        metadata = protected_resource.json()
+        assert metadata.get("resource") == base_url
+        assert "authorization_servers" in metadata
 
         # Verify the session can still call tools
         headers = self._build_mcp_headers(session_state)
