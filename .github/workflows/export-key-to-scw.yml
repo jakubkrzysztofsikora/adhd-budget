@@ -16,9 +16,8 @@ jobs:
       - name: Install Scaleway CLI
         run: |
           curl -s https://raw.githubusercontent.com/scaleway/scaleway-cli/master/scripts/get.sh | sh
-          scw version
 
-      - name: Create secret in Scaleway
+      - name: Store key in Scaleway
         env:
           SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
@@ -26,23 +25,26 @@ jobs:
           SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_PROJECT_ID }}
           ENABLE_PRIVATE_KEY: ${{ secrets.ENABLE_PRIVATE_KEY }}
         run: |
-          # Create the secret (ignore error if already exists)
-          scw secret secret create \
-            name=adhd-budget-enable-banking-key \
-            description="Enable Banking RSA private key for ADHD Budget app" \
-            tags.0=adhd-budget \
-            tags.1=enable-banking \
-            region=fr-par 2>/dev/null || echo "Secret already exists, adding new version"
+          SECRET_ID="f640b63d-2299-436c-b8e1-b0ac36367d61"
 
-          # Get the secret ID
-          SECRET_ID=$(scw secret secret list name=adhd-budget-enable-banking-key region=fr-par -o json | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
-          echo "Secret ID: $SECRET_ID"
+          # Write key to temp file, base64 encode it properly
+          echo "$ENABLE_PRIVATE_KEY" > /tmp/eb_key.pem
+          B64_DATA=$(base64 -w 0 /tmp/eb_key.pem)
 
-          # Create a new version with the key data
-          echo -n "$ENABLE_PRIVATE_KEY" | base64 | scw secret version create \
+          # Create new version with proper base64 data
+          scw secret version create \
             secret-id=$SECRET_ID \
-            data=- \
-            description="Exported from GitHub secrets $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            data="$B64_DATA" \
+            description="Re-exported $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             region=fr-par
 
-          echo "Key exported successfully to Scaleway Secret Manager"
+          # Verify
+          VERIFY=$(scw secret version access $SECRET_ID revision=latest raw=true region=fr-par)
+          if echo "$VERIFY" | grep -q "BEGIN"; then
+            echo "Key verified successfully"
+          else
+            echo "ERROR: Key verification failed"
+            exit 1
+          fi
+
+          rm -f /tmp/eb_key.pem
