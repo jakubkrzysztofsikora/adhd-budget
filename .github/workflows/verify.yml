@@ -151,17 +151,17 @@ jobs:
               chmod 644 keys/enablebanking_private.pem
             fi
 
-            # Create .env (no leading whitespace!)
-            cat > .env <<ENVEOF
-DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}
-ENABLE_APP_ID=${{ secrets.ENABLE_APP_ID }}
-ENABLE_PRIVATE_KEY_PATH=/app/keys/enablebanking_private.pem
-ENABLE_API_BASE_URL=${{ secrets.ENABLE_API_BASE_URL }}
-EXTERNAL_URL=https://adhdbudget.bieda.it
-ASPSP_NAME=${{ secrets.ASPSP_NAME }}
-ASPSP_COUNTRY=${{ secrets.ASPSP_COUNTRY }}
-CADDYFILE=./Caddyfile
-ENVEOF
+            # Create .env
+            printf '%s\n' \
+              "DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}" \
+              "ENABLE_APP_ID=${{ secrets.ENABLE_APP_ID }}" \
+              "ENABLE_PRIVATE_KEY_PATH=/app/keys/enablebanking_private.pem" \
+              "ENABLE_API_BASE_URL=${{ secrets.ENABLE_API_BASE_URL }}" \
+              "EXTERNAL_URL=https://adhdbudget.bieda.it" \
+              "ASPSP_NAME=${{ secrets.ASPSP_NAME }}" \
+              "ASPSP_COUNTRY=${{ secrets.ASPSP_COUNTRY }}" \
+              "CADDYFILE=./Caddyfile" \
+              > .env
 
             docker compose down || true
             docker compose --env-file .env up -d --build
