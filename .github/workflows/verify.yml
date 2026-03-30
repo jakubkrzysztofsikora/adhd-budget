@@ -119,7 +119,7 @@ jobs:
         run: |
           mkdir -p keys
           echo "Keys directory for Enable Banking" > keys/README.md
-          tar -czf deploy.tar.gz docker-compose.yml mcp-server/ Caddyfile.prod keys/ .env.example
+          tar -czf deploy.tar.gz docker-compose.yml mcp-server/ Caddyfile.prod Caddyfile.test Dockerfile.caddy-secure Dockerfile keys/ .env.example
       - name: Copy to VPS
         uses: appleboy/scp-action@v0.1.5
         with:
@@ -151,17 +151,17 @@ jobs:
               chmod 644 keys/enablebanking_private.pem
             fi
 
-            # Create .env
-            cat > .env << 'ENVEOF'
-            DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}
-            ENABLE_APP_ID=${{ secrets.ENABLE_APP_ID }}
-            ENABLE_PRIVATE_KEY_PATH=/app/keys/enablebanking_private.pem
-            ENABLE_API_BASE_URL=${{ secrets.ENABLE_API_BASE_URL }}
-            EXTERNAL_URL=https://adhdbudget.bieda.it
-            ASPSP_NAME=${{ secrets.ASPSP_NAME }}
-            ASPSP_COUNTRY=${{ secrets.ASPSP_COUNTRY }}
-            CADDYFILE=./Caddyfile
-            ENVEOF
+            # Create .env (no leading whitespace!)
+            cat > .env <<ENVEOF
+DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}
+ENABLE_APP_ID=${{ secrets.ENABLE_APP_ID }}
+ENABLE_PRIVATE_KEY_PATH=/app/keys/enablebanking_private.pem
+ENABLE_API_BASE_URL=${{ secrets.ENABLE_API_BASE_URL }}
+EXTERNAL_URL=https://adhdbudget.bieda.it
+ASPSP_NAME=${{ secrets.ASPSP_NAME }}
+ASPSP_COUNTRY=${{ secrets.ASPSP_COUNTRY }}
+CADDYFILE=./Caddyfile
+ENVEOF
 
             docker compose down || true
             docker compose --env-file .env up -d --build
