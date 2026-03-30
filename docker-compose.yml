@@ -70,7 +70,6 @@ services:
       dockerfile: Dockerfile.caddy-secure
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ${CADDYFILE:-./Caddyfile.test}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
