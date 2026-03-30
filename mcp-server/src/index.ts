@@ -39,9 +39,10 @@ if (config.enableAppId && config.enablePrivateKeyPath) {
 }
 
 // Create Express app with DNS rebinding protection
-const app = config.host === '0.0.0.0'
-  ? createMcpExpressApp({ host: '0.0.0.0', allowedHosts: ['localhost', '127.0.0.1'] })
-  : createMcpExpressApp();
+// Derive allowed hosts from EXTERNAL_URL + localhost for dev
+const externalHostname = new URL(config.externalUrl).hostname;
+const allowedHosts = ['localhost', '127.0.0.1', externalHostname];
+const app = createMcpExpressApp({ host: config.host, allowedHosts });
 
 app.use(express.json());
 
