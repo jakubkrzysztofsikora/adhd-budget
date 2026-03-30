@@ -25,131 +25,47 @@ services:
       - CHOWN
       - DAC_OVERRIDE
 
-  mcp-server:
+  # New TypeScript MCP Server — one instance per bank
+  # Shared build definition
+  x-mcp-server: &mcp-server-base
     build:
-      context: .
-      dockerfile: Dockerfile.mcp
-    depends_on:
-      db:
-        condition: service_healthy
+      context: ./mcp-server
+      dockerfile: Dockerfile
     volumes:
       - ./keys:/app/keys:ro
-      - mcp_logs:/var/log/mcp
+    restart: unless-stopped
+    user: "node"
+    mem_limit: 256m
+    cpus: '0.5'
+    cap_drop:
+      - ALL
+
+  # Bank: Mock ASPSP (sandbox/dev — default)
+  mcp-server:
+    <<: *mcp-server-base
     environment:
-      - MCP_PORT=8081
-      - MCP_HOST=0.0.0.0
-      - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=adhd_budget
-      - DB_USER=budget_user
-      - DB_PASSWORD=${DB_PASSWORD}
-      - ENABLE_ENV=${ENABLE_ENV:-sandbox}
-      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
-      - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
-      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
-      - ENABLE_OAUTH_REDIRECT_URL=${ENABLE_OAUTH_REDIRECT_URL:-http://localhost:8081/auth/callback}
-      - ENABLE_OAUTH_SCOPES=${ENABLE_OAUTH_SCOPES:-accounts transactions}
-      - ENABLE_MOCK_FALLBACK=${ENABLE_MOCK_FALLBACK:-true}
+      PORT: "8081"
+      HOST: "0.0.0.0"
+      ASPSP_NAME: ${ASPSP_NAME:-MOCKASPSP_SANDBOX}
+      ASPSP_COUNTRY: ${ASPSP_COUNTRY:-FI}
+      EXTERNAL_URL: ${EXTERNAL_URL:-http://localhost:8081}
+      ENABLE_APP_ID: ${ENABLE_APP_ID:-}
+      ENABLE_PRIVATE_KEY_PATH: ${ENABLE_PRIVATE_KEY_PATH:-}
+      ENABLE_API_BASE_URL: ${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
+      DATA_DIR: /app/data
     ports:
       - "8081:8081"
+    volumes:
+      - ./keys:/app/keys:ro
+      - mcp_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    restart: unless-stopped
-    mem_limit: 256m
-    cpus: '0.25'
-    cap_drop:
-      - ALL
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  worker:
-    image: python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
-    user: "1000:1000"
-    volumes:
-      - ./src:/app
-      - ./keys:/app/keys:ro
-    working_dir: /app
-    command: sh -c "export HOME=/tmp && pip install --no-cache-dir --user requests cryptography PyJWT psycopg2-binary schedule && export PATH=/tmp/.local/bin:$PATH && python /app/worker.py"
-    environment:
-      - PYTHONPATH=/tmp/.local/lib/python3.11/site-packages
-      - ENABLE_ENV=${ENABLE_ENV:-sandbox}
-      - ENABLE_API_BASE_URL=${ENABLE_API_BASE_URL:-https://api.enablebanking.com}
-      - ENABLE_APP_ID=${ENABLE_APP_ID:-sandbox-app-id}
-      - ENABLE_PRIVATE_KEY_PATH=${ENABLE_PRIVATE_KEY_PATH:-/app/keys/test_private.pem}
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=adhd_budget
-      - DB_USER=budget_user
-      - DB_PASSWORD=${DB_PASSWORD}
-    restart: unless-stopped
-    mem_limit: 256m
-    cpus: '0.25'
-    cap_drop:
-      - ALL
     depends_on:
       db:
         condition: service_healthy
-
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    volumes:
-      - ./src:/app
-    environment:
-      - API_PORT=8082
-      - API_AUTH_TOKEN=${API_TOKEN:-api-secret}
-    ports:
-      - "8082:8082"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8082"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-    mem_limit: 128m
-    cpus: '0.25'
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-
-  mcp-inspector:
-    image: node:22-alpine@sha256:6e80991f69cc7722c561e5d14d5e72ab47c0d6b6cfb3ae50fb9cf9a7b30fdf97
-    # Note: Runs as root for package installation (development tool only)
-    working_dir: /app
-    volumes:
-      - ./src:/app/src
-      - ./mcp-config.json:/app/mcp-config.json:ro
-    ports:
-      - "6274:6274"
-      - "6277:6277"
-    environment:
-      - CLIENT_PORT=6274
-      - SERVER_PORT=6277
-      - HOST=0.0.0.0
-      - ALLOWED_ORIGINS=http://localhost:6274,http://host.docker.internal:6274
-      - DANGEROUSLY_OMIT_AUTH=true
-    command: >
-      sh -c "
-        apk add --no-cache git &&
-        npx @modelcontextprotocol/inspector
-      "
-    depends_on:
-      mcp-server:
-        condition: service_started
-    restart: unless-stopped
-    mem_limit: 256m
-    cpus: '0.25'
-    cap_drop:
-      - ALL
 
   reverse-proxy:
     build:
@@ -170,7 +86,6 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     depends_on:
-      - api
       - mcp-server
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
@@ -180,7 +95,7 @@ services:
 
   redis:
     image: redis:7-alpine@sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08
-    user: "999:999"  # Redis user
+    user: "999:999"
     command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     mem_limit: 128m
@@ -193,72 +108,11 @@ services:
       timeout: 10s
       retries: 3
 
-  log-viewer:
-    build:
-      context: .
-      dockerfile: Dockerfile.log-viewer
-    volumes:
-      - mcp_logs:/var/log/mcp:ro
-      - ./certs:/app/certs:ro
-    environment:
-      - LOG_DIR=/var/log/mcp
-      - LOG_VIEWER_PORT=8888
-      - CERT_FILE=/app/certs/server.crt
-      - KEY_FILE=/app/certs/server.key
-      - CA_FILE=/app/certs/ca.crt
-    ports:
-      - "8888:8888"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://localhost:8888/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    mem_limit: 128m
-    cpus: '0.25'
-    cap_drop:
-      - ALL
-    depends_on:
-      mcp-server:
-        condition: service_started
-
-  test-runner:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    volumes:
-      - ./tests:/app/tests
-      - ./src:/app/src
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=adhd_budget
-      - DB_USER=budget_user
-      - DB_PASSWORD=${DB_PASSWORD}
-      - API_URL=http://api:8082
-      - MCP_URL=http://mcp-server:8081
-      - PROXY_URL=http://reverse-proxy
-    depends_on:
-      db:
-        condition: service_healthy
-      api:
-        condition: service_started
-      mcp-server:
-        condition: service_started
-      reverse-proxy:
-        condition: service_started
-    networks:
-      - default
-    profiles:
-      - test
-
 volumes:
   db_data:
   caddy_data:
   caddy_config:
-  mcp_logs:
+  mcp_data:
 
 networks:
   default:

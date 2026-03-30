@@ -1,7 +1,6 @@
 # Production Caddy configuration with HTTPS
 adhdbudget.bieda.it {
     # Automatic HTTPS with Let's Encrypt
-    # Note: If behind Cloudflare, set SSL/TLS to "Full (strict)" mode
     tls
 
     # Security headers
@@ -15,55 +14,61 @@ adhdbudget.bieda.it {
 
     # Health endpoint
     handle /health {
-        respond "OK" 200
+        reverse_proxy mcp-server:8081
     }
 
-    # MCP Server with SSE support
+    # MCP Server — Streamable HTTP with SSE support
     handle /mcp* {
         reverse_proxy mcp-server:8081 {
-            # Disable buffering for SSE
             flush_interval -1
-            
-            # Headers for SSE
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
             header_down X-Accel-Buffering no
-            
-            # Pass original protocol
             header_up X-Forwarded-Proto {scheme}
             header_up X-Forwarded-Host {host}
         }
     }
 
-    # OAuth endpoints (well-known, token, callback)
-    handle /.well-known* {
+    # OAuth discovery endpoints
+    handle /.well-known/* {
         reverse_proxy mcp-server:8081 {
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            header_up X-Forwarded-Host {host}
-        }
-    }
-    
-    handle /oauth* {
-        reverse_proxy mcp-server:8081 {
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            header_up X-Forwarded-Host {host}
-        }
-    }
-    
-    handle /auth* {
-        reverse_proxy mcp-server:8081 {
-            header_up X-Real-IP {remote_host}
             header_up X-Forwarded-Proto {scheme}
             header_up X-Forwarded-Host {host}
         }
     }
 
-    # API endpoints
-    handle /api* {
-        reverse_proxy api:8082 {
-            header_up X-Real-IP {remote_host}
+    # OAuth endpoints (Claude.ai hardcodes these paths)
+    handle /authorize {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /token {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /register {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /revoke {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Enable Banking callback
+    handle /auth/* {
+        reverse_proxy mcp-server:8081 {
             header_up X-Forwarded-Proto {scheme}
             header_up X-Forwarded-Host {host}
         }
