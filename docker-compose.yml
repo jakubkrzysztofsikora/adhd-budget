@@ -1,4 +1,16 @@
-version: '3.8'
+# Shared MCP server build definition (top-level extension)
+x-mcp-server: &mcp-server-base
+  build:
+    context: ./mcp-server
+    dockerfile: Dockerfile
+  volumes:
+    - ./keys:/app/keys:ro
+  restart: unless-stopped
+  user: "node"
+  mem_limit: 256m
+  cpus: '0.5'
+  cap_drop:
+    - ALL
 
 services:
   db:
@@ -24,21 +36,6 @@ services:
       - SETGID
       - CHOWN
       - DAC_OVERRIDE
-
-  # New TypeScript MCP Server — one instance per bank
-  # Shared build definition
-  x-mcp-server: &mcp-server-base
-    build:
-      context: ./mcp-server
-      dockerfile: Dockerfile
-    volumes:
-      - ./keys:/app/keys:ro
-    restart: unless-stopped
-    user: "node"
-    mem_limit: 256m
-    cpus: '0.5'
-    cap_drop:
-      - ALL
 
   # Bank: Mock ASPSP (sandbox/dev — default)
   mcp-server:
