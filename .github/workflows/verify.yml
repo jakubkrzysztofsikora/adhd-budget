@@ -163,10 +163,12 @@ jobs:
               "CADDYFILE=./Caddyfile" \
               > .env
 
-            docker compose down || true
+            docker compose down --remove-orphans || true
+            docker rm -f adhd-budget-x-mcp-server-1 2>/dev/null || true
             docker compose --env-file .env up -d --build
-            sleep 10
+            sleep 15
             docker compose ps
+            curl -sf http://localhost:8081/health || echo "Health check failed"
 
   # Gates Status
   gates-status:
