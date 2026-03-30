@@ -2,6 +2,11 @@ name: Export EB Key to Scaleway
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - claude/analyze-mcp-banking-oauth-dIdei
+    paths:
+      - '.github/workflows/export-key-to-scw.yml'
 
 jobs:
   export-key:
