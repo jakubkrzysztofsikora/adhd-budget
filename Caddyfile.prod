@@ -69,6 +69,14 @@
         }
     }
 
+    # Debug endpoints
+    handle /debug/* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
     # Default
     handle {
         respond "ADHD Budget Assistant" 200
