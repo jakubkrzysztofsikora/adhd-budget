@@ -252,7 +252,7 @@ describe('Full OAuth + MCP E2E', () => {
     expect(tokens.access_token).toBeTruthy();
     expect(tokens.refresh_token).toBeTruthy();
     expect(tokens.token_type).toBe('Bearer');
-    expect(tokens.expires_in).toBe(3600);
+    expect(tokens.expires_in).toBe(90 * 24 * 3600); // 90 days
     mcpAccessToken = tokens.access_token;
     mcpRefreshToken = tokens.refresh_token;
   });

@@ -228,7 +228,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     // Generate tokens
     const accessToken = generateToken();
     const refreshToken = generateToken();
-    const expiresIn = 3600; // 1 hour
+    const expiresIn = 90 * 24 * 3600; // 90 days — matches EB session validity
 
     // Store access token -> EB session mapping
     this.sessionStore.store(
@@ -248,7 +248,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       record.account_uids,
       client.client_id,
       Date.now(),
-      Date.now() + 30 * 24 * 3600_000, // 30 days
+      Date.now() + 90 * 24 * 3600_000, // 90 days — sliding, same as access token
     );
 
     logger.info({ clientId: client.client_id }, 'oauth.token.issued');
