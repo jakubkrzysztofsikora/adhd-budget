@@ -168,10 +168,10 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error({ err: errMsg, clientId: client.client_id }, 'oauth.authorize.failed');
-      // Redirect back to client with error
+      // Redirect back to client with error (include actual error for debugging)
       const errorUrl = new URL(params.redirectUri);
       errorUrl.searchParams.set('error', 'server_error');
-      errorUrl.searchParams.set('error_description', 'Failed to initiate bank authorization');
+      errorUrl.searchParams.set('error_description', `Bank auth failed: ${errMsg}`);
       if (params.state) errorUrl.searchParams.set('state', params.state);
       res.redirect(errorUrl.toString());
     }
