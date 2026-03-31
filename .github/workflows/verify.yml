@@ -144,11 +144,14 @@ jobs:
 
             cp Caddyfile.prod Caddyfile
 
-            # Write Enable Banking private key
+            # Write Enable Banking private key (printf preserves newlines better than echo)
             if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
               mkdir -p keys
-              echo "${{ secrets.ENABLE_PRIVATE_KEY }}" > keys/enablebanking_private.pem
+              printf '%s\n' '${{ secrets.ENABLE_PRIVATE_KEY }}' > keys/enablebanking_private.pem
               chmod 644 keys/enablebanking_private.pem
+              # Verify key is valid
+              head -1 keys/enablebanking_private.pem
+              wc -l keys/enablebanking_private.pem
             fi
 
             # Create .env

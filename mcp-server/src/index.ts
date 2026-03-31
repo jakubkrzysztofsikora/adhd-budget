@@ -53,6 +53,9 @@ app.get('/health', (_req, res) => {
     bank: config.aspspName,
     country: config.aspspCountry,
     auth: oauthProvider ? 'oauth' : 'none',
+    ebConfigured: !!ebClient,
+    externalUrl: config.externalUrl,
+    ebCallbackUrl: `${config.externalUrl}/auth/eb-callback`,
   });
 });
 

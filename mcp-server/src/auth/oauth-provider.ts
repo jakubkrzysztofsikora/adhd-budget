@@ -166,7 +166,8 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       logger.info({ clientId: client.client_id }, 'oauth.authorize.redirecting_to_bank');
       res.redirect(ebResponse.url);
     } catch (err) {
-      logger.error({ err, clientId: client.client_id }, 'oauth.authorize.failed');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMsg, clientId: client.client_id }, 'oauth.authorize.failed');
       // Redirect back to client with error
       const errorUrl = new URL(params.redirectUri);
       errorUrl.searchParams.set('error', 'server_error');
