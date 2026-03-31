@@ -1,0 +1,15 @@
+{
+  "redirect_uris": [
+    "http://localhost:9999/callback"
+  ],
+  "token_endpoint_auth_method": "none",
+  "grant_types": [
+    "authorization_code"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "client_name": "E2E Test Client",
+  "client_id": "72e3efaf-fa03-4788-a763-ea801d79bb67",
+  "client_id_issued_at": 1774962330
+}

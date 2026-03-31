@@ -1,0 +1,18 @@
+FROM node:22-alpine
+
+# Install basic tools
+RUN apk add --no-cache bash curl jq
+
+# Install Claude Code CLI globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create test user
+RUN adduser -D -s /bin/bash tester
+USER tester
+WORKDIR /home/tester
+
+# Copy test script
+COPY --chown=tester:tester tests/e2e/run-claude-mcp-test.sh /home/tester/run-test.sh
+RUN chmod +x /home/tester/run-test.sh
+
+ENTRYPOINT ["/home/tester/run-test.sh"]

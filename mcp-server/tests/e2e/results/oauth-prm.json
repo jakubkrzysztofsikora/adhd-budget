@@ -1,0 +1,10 @@
+{
+  "resource": "https://adhdbudget.bieda.it/",
+  "authorization_servers": [
+    "https://adhdbudget.bieda.it/"
+  ],
+  "scopes_supported": [
+    "banking"
+  ],
+  "resource_name": "Enable Banking - Nordea"
+}

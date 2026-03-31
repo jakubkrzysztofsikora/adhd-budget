@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "bank": "Nordea",
+  "country": "FI",
+  "auth": "oauth",
+  "ebConfigured": true,
+  "ebApiReachable": true,
+  "externalUrl": "https://adhdbudget.bieda.it"
+}
