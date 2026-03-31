@@ -7,6 +7,7 @@ COPY src/ src/
 RUN npm run build
 
 FROM node:22-alpine
+RUN apk add --no-cache ca-certificates wget
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

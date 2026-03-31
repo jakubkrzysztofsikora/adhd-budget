@@ -47,15 +47,26 @@ const app = createMcpExpressApp({ host: config.host, allowedHosts });
 app.use(express.json());
 
 // Health endpoint (unauthenticated)
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  let ebApiReachable = false;
+  let ebApiError = '';
+  if (ebClient) {
+    try {
+      await ebClient.listAspsps('FI');
+      ebApiReachable = true;
+    } catch (err) {
+      ebApiError = err instanceof Error ? err.message : String(err);
+    }
+  }
   res.json({
     status: 'ok',
     bank: config.aspspName,
     country: config.aspspCountry,
     auth: oauthProvider ? 'oauth' : 'none',
     ebConfigured: !!ebClient,
+    ebApiReachable,
+    ebApiError: ebApiError || undefined,
     externalUrl: config.externalUrl,
-    ebCallbackUrl: `${config.externalUrl}/auth/eb-callback`,
   });
 });
 
