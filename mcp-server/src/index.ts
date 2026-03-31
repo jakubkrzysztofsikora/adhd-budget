@@ -54,8 +54,9 @@ app.get('/health', async (_req, res) => {
     try {
       await ebClient.listAspsps('FI');
       ebApiReachable = true;
-    } catch (err) {
-      ebApiError = err instanceof Error ? err.message : String(err);
+    } catch (err: unknown) {
+      const e = err as Error & { cause?: Error };
+      ebApiError = e.cause?.message || e.message || String(err);
     }
   }
   res.json({
