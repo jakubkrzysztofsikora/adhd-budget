@@ -46,10 +46,7 @@ async function sseToJson(response: Response): Promise<unknown> {
   return JSON.parse(dataLine.replace('data: ', ''));
 }
 
-const HAS_EB_CREDENTIALS = !!process.env.ENABLE_APP_ID;
-const describeE2E = HAS_EB_CREDENTIALS ? describe : describe.skip;
-
-describeE2E('Full OAuth + MCP Tool Invocation E2E', () => {
+describe('Full OAuth + MCP Tool Invocation E2E', () => {
   let serverProcess: ChildProcess;
   let testAccessToken: string;
 
@@ -57,10 +54,8 @@ describeE2E('Full OAuth + MCP Tool Invocation E2E', () => {
     const keyPath = process.env.ENABLE_PRIVATE_KEY_PATH || '../keys/enablebanking_private.pem';
     const appId = process.env.ENABLE_APP_ID || '';
 
-    // Skip entire suite if no EB credentials
     if (!appId) {
-      console.log('ENABLE_APP_ID not set — skipping full OAuth E2E tests');
-      return;
+      throw new Error('ENABLE_APP_ID is required. Set ENABLE_APP_ID and ENABLE_PRIVATE_KEY_PATH env vars to run E2E tests.');
     }
 
     const { mkdirSync } = await import('node:fs');
