@@ -14,6 +14,7 @@ import type { Response } from 'express';
 import { ClientRegistry } from './client-registry.js';
 import { SessionStore } from '../enable-banking/session-store.js';
 import type { EnableBankingClient } from '../enable-banking/client.js';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger();
@@ -318,7 +319,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const session = this.sessionStore.getByToken(token);
     if (!session) {
-      throw new Error('Invalid or expired access token');
+      throw new InvalidTokenError('Invalid or expired access token');
     }
 
     return {

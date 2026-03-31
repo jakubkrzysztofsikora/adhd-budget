@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { InvalidClientMetadataError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
 // Only allow Claude's known redirect URIs
 const ALLOWED_REDIRECT_PATTERNS = [
@@ -49,7 +50,7 @@ export class ClientRegistry implements OAuthRegisteredClientsStore {
     if (client.redirect_uris) {
       for (const uri of client.redirect_uris) {
         if (!isAllowedRedirectUri(uri)) {
-          throw new Error(`Redirect URI not allowed: ${uri}`);
+          throw new InvalidClientMetadataError(`Redirect URI not allowed: ${uri}`);
         }
       }
     }
