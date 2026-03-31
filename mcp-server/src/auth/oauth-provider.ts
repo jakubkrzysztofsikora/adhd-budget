@@ -199,7 +199,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     _codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
-    logger.info({ clientId: client.client_id, hasCode: !!authorizationCode, redirectUri }, 'oauth.token.exchange_started');
+    logger.info({ clientId: client.client_id, hasCode: !!authorizationCode, codeLen: authorizationCode?.length, redirectUri }, 'oauth.token.exchange_started');
     const codeHash = hashToken(authorizationCode);
     const record = this.db.prepare(
       'SELECT * FROM auth_codes WHERE code_hash = ? AND used = 0 AND expires_at > ?',

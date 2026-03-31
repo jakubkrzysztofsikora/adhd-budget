@@ -46,6 +46,18 @@ const app = createMcpExpressApp({ host: config.host, allowedHosts });
 
 app.use(express.json());
 
+// Debug: recent OAuth events (only in non-production)
+const oauthLog: Array<{ time: string; event: string; details: string }> = [];
+function logOAuth(event: string, details: Record<string, unknown>) {
+  const entry = { time: new Date().toISOString(), event, details: JSON.stringify(details) };
+  oauthLog.push(entry);
+  if (oauthLog.length > 50) oauthLog.shift();
+  logger.info(details, `oauth.${event}`);
+}
+app.get('/debug/oauth-log', (_req, res) => {
+  res.json(oauthLog.slice(-20));
+});
+
 // Health endpoint (unauthenticated)
 app.get('/health', async (_req, res) => {
   let ebApiReachable = false;
@@ -84,20 +96,23 @@ if (oauthProvider) {
 
   // Enable Banking callback (NOT part of mcpAuthRouter)
   app.get('/auth/eb-callback', async (req, res) => {
-    const { code, state } = req.query;
-    logger.info({ hasCode: !!code, hasState: !!state }, 'oauth.eb_callback.received');
+    const { code, state, error: ebError } = req.query;
+    logOAuth('eb_callback', { hasCode: !!code, hasState: !!state, ebError: ebError || undefined });
+    if (ebError) {
+      res.status(400).send(`Enable Banking error: ${ebError}`);
+      return;
+    }
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      logger.warn({ query: req.query }, 'oauth.eb_callback.missing_params');
       res.status(400).send('Missing code or state parameter');
       return;
     }
     const result = await oauthProvider!.handleEbCallback(code, state);
     if ('error' in result) {
-      logger.error({ error: result.error }, 'oauth.eb_callback.error');
+      logOAuth('eb_callback_error', { error: result.error });
       res.status(400).send(result.error);
       return;
     }
-    logger.info({ redirectUrl: result.redirectUrl.substring(0, 80) }, 'oauth.eb_callback.redirecting');
+    logOAuth('eb_callback_success', { redirect: result.redirectUrl.substring(0, 100) });
     res.redirect(result.redirectUrl);
   });
 }
