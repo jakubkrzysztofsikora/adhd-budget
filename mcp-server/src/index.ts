@@ -85,15 +85,19 @@ if (oauthProvider) {
   // Enable Banking callback (NOT part of mcpAuthRouter)
   app.get('/auth/eb-callback', async (req, res) => {
     const { code, state } = req.query;
+    logger.info({ hasCode: !!code, hasState: !!state }, 'oauth.eb_callback.received');
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
+      logger.warn({ query: req.query }, 'oauth.eb_callback.missing_params');
       res.status(400).send('Missing code or state parameter');
       return;
     }
     const result = await oauthProvider!.handleEbCallback(code, state);
     if ('error' in result) {
+      logger.error({ error: result.error }, 'oauth.eb_callback.error');
       res.status(400).send(result.error);
       return;
     }
+    logger.info({ redirectUrl: result.redirectUrl.substring(0, 80) }, 'oauth.eb_callback.redirecting');
     res.redirect(result.redirectUrl);
   });
 }

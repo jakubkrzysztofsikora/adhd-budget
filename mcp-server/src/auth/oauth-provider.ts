@@ -198,13 +198,16 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     _codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
+    logger.info({ clientId: client.client_id, hasCode: !!authorizationCode, redirectUri }, 'oauth.token.exchange_started');
     const codeHash = hashToken(authorizationCode);
     const record = this.db.prepare(
       'SELECT * FROM auth_codes WHERE code_hash = ? AND used = 0 AND expires_at > ?',
     ).get(codeHash, Date.now()) as AuthCodeRecord | undefined;
 
     if (!record) {
-      logger.warn({ clientId: client.client_id }, 'oauth.token.invalid_code');
+      // Debug: check if code exists at all (maybe expired or used)
+      const anyRecord = this.db.prepare('SELECT used, expires_at FROM auth_codes WHERE code_hash = ?').get(codeHash) as { used: number; expires_at: number } | undefined;
+      logger.warn({ clientId: client.client_id, codeExists: !!anyRecord, used: anyRecord?.used, expired: anyRecord ? Date.now() > anyRecord.expires_at : undefined }, 'oauth.token.invalid_code');
       throw new Error('Invalid or expired authorization code');
     }
 
@@ -379,7 +382,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
         pending.redirect_uri,
         pending.code_challenge,
         Date.now(),
-        Date.now() + 60_000, // 60 second TTL
+        Date.now() + 300_000, // 5 min TTL
       );
 
       // Build redirect URL back to Claude
