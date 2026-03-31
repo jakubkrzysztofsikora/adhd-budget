@@ -131,11 +131,14 @@ jobs:
           target: "/home/${{ secrets.VPS_USER }}/"
       - name: Deploy
         uses: appleboy/ssh-action@v0.1.8
+        env:
+          EB_KEY: ${{ secrets.ENABLE_PRIVATE_KEY }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_SSH_PASSWORD }}
           port: ${{ secrets.VPS_SSH_PORT }}
+          envs: EB_KEY
           script: |
             cd /home/${{ secrets.VPS_USER }}
             mkdir -p adhd-budget
@@ -144,15 +147,12 @@ jobs:
 
             cp Caddyfile.prod Caddyfile
 
-            # Write Enable Banking private key (printf preserves newlines better than echo)
-            if [ -n "${{ secrets.ENABLE_PRIVATE_KEY }}" ]; then
-              mkdir -p keys
-              printf '%s\n' '${{ secrets.ENABLE_PRIVATE_KEY }}' > keys/enablebanking_private.pem
-              chmod 644 keys/enablebanking_private.pem
-              # Verify key is valid
-              head -1 keys/enablebanking_private.pem
-              wc -l keys/enablebanking_private.pem
-            fi
+            # Write Enable Banking private key via environment variable
+            mkdir -p keys
+            printenv EB_KEY > keys/enablebanking_private.pem
+            chmod 644 keys/enablebanking_private.pem
+            head -1 keys/enablebanking_private.pem
+            wc -l keys/enablebanking_private.pem
 
             # Create .env
             printf '%s\n' \
