@@ -1,0 +1,31 @@
+- main [ref=e2]:
+  - paragraph [ref=e24]: Log in to connect a device to your tailnet.
+  - generic [ref=e25]:
+    - textbox "Enter your email..." [active] [ref=e26]
+    - button "Sign in" [ref=e27] [cursor=pointer]
+  - generic [ref=e28]: or
+  - button "Sign in with Google" [ref=e30] [cursor=pointer]
+  - button "Sign in with Microsoft" [ref=e37] [cursor=pointer]
+  - button "Sign in with GitHub" [ref=e44] [cursor=pointer]
+  - button "Sign in with Apple" [ref=e48] [cursor=pointer]
+  - button "Sign in with a passkey" [ref=e54] [cursor=pointer]
+  - generic [ref=e60]:
+    - paragraph [ref=e61]:
+      - text: Alternatively, use a
+      - link "QR code" [ref=e62] [cursor=pointer]:
+        - /url: https://login.tailscale.com/login?next_url=%2Fa%2F4453853013ef0&refresh=true&qr
+      - text: .
+    - paragraph [ref=e63]:
+      - strong [ref=e64]: First time?
+      - text: Learn more at
+      - link "tailscale.com" [ref=e65] [cursor=pointer]:
+        - /url: https://tailscale.com
+      - text: .
+  - paragraph [ref=e67]:
+    - text: By clicking the buttons above, you acknowledge that you have read, understood, and agree to Tailscale’s
+    - link "Terms of Service" [ref=e68] [cursor=pointer]:
+      - /url: https://tailscale.com/terms
+    - text: and
+    - link "Privacy Policy" [ref=e69] [cursor=pointer]:
+      - /url: https://tailscale.com/privacy
+    - text: .

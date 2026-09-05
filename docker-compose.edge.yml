@@ -1,0 +1,15 @@
+services:
+  reverse-proxy:
+    image: caddy:2-alpine
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.25'
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,91 @@
+# Production Caddy Edge configuration — HTTP only (Cloudflare handles TLS)
+:80 {
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Health endpoint
+    handle /health {
+        reverse_proxy http://100.69.232.58:30081
+    }
+
+    # MCP Server — Streamable HTTP with SSE
+    handle /mcp* {
+        reverse_proxy http://100.69.232.58:30081 {
+            flush_interval -1
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # OAuth discovery
+    handle /.well-known/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # OAuth endpoints (Claude.ai / ChatGPT / custom clients)
+    handle /authorize {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /token {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /register {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /revoke {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Enable Banking callback and connect dashboard
+    handle /auth/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /connect* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Debug endpoints
+    handle /debug/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Default
+    handle {
+        respond "ADHD Budget Assistant Edge" 200
+    }
+}

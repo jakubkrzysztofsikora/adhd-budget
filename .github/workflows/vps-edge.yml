@@ -48,6 +48,123 @@ jobs:
                 echo "=== DUMPING SESSIONS FROM RUNNING MCP CONTAINER ==="
                 docker exec $(docker ps -q --filter name=mcp-server | head -1) ls -la /app/data/ 2>/dev/null || true
               fi
+            elif [ "$CMD_INPUT" = "deploy-edge" ]; then
+              echo "=== TEARING DOWN MONOLITHIC BACKEND ON VPS ==="
+              cd /home/${USER}/adhd-budget
+              docker compose down --remove-orphans || true
+              docker rm -f adhd-budget-mcp-server-1 adhd-budget-db-1 adhd-budget-redis-1 adhd-budget-reverse-proxy-1 2>/dev/null || true
+              docker volume rm adhd-budget_mcp_data 2>/dev/null || true
+              rm -rf keys/ .env
+
+              echo "=== WRITING EDGE CADDYFILE ==="
+              cat << 'CADDY_EOF' > Caddyfile
+:80 {
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    handle /health {
+        reverse_proxy http://100.69.232.58:30081
+    }
+
+    handle /mcp* {
+        reverse_proxy http://100.69.232.58:30081 {
+            flush_interval -1
+            header_up Accept-Encoding identity
+            header_down Cache-Control no-cache
+            header_down X-Accel-Buffering no
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /.well-known/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /authorize {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /token {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /register {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /revoke {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /auth/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /connect* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /debug/* {
+        reverse_proxy http://100.69.232.58:30081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle {
+        respond "ADHD Budget Assistant Edge" 200
+    }
+}
+CADDY_EOF
+
+              echo "=== WRITING DOCKER-COMPOSE.YML FOR EDGE ==="
+              cat << 'COMPOSE_EOF' > docker-compose.yml
+services:
+  reverse-proxy:
+    image: caddy:2-alpine
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.25'
+
+volumes:
+  caddy_data:
+  caddy_config:
+COMPOSE_EOF
+
+              echo "=== STARTING EDGE PROXY CONTAINER ==="
+              docker compose up -d --force-recreate
+              sleep 3
+              docker ps
             else
               echo "Executing custom command: $CMD_INPUT"
               eval "$CMD_INPUT"
