@@ -183,5 +183,91 @@ describe('EnableBankingOAuthProvider (Simplified OAuth 2.1)', () => {
     const refreshedAuthInfo = await provider.verifyAccessToken(refreshed.access_token);
     expect(refreshedAuthInfo.extra?.userId).toBe('jakub');
     expect(refreshedAuthInfo.extra?.accountUids).toEqual(expect.arrayContaining(['pko-acc-1', 'pko-acc-2', 'rev-acc-1']));
+
+    // 1. Test Code Replay Attack: Reusing the same code MUST fail and revoke tokens
+    await expect(
+      provider.exchangeAuthorizationCode(
+        client,
+        code,
+        codeVerifier,
+        'https://claude.ai/api/mcp/auth_callback',
+      ),
+    ).rejects.toThrow('Invalid or expired authorization code');
+
+    // And refresh token should now be revoked due to cascade revocation
+    await expect(
+      provider.exchangeRefreshToken(client, refreshed.refresh_token!),
+    ).rejects.toThrow('Invalid or expired refresh token');
+  });
+
+  it('rejects authorization code exchange if redirect_uri is omitted or mismatched', async () => {
+    const client = provider.clientsStore.registerClient({
+      client_name: 'Claude Web Test',
+      redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    });
+
+    const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+    const codeChallenge = computeS256(codeVerifier);
+
+    let redirectUrl = '';
+    const mockRes = {
+      setHeader: () => {},
+      send: () => {},
+      redirect: (url: string) => {
+        redirectUrl = url;
+      },
+      req: {
+        method: 'POST',
+        body: { username: 'jakub', password: 'test_password_123' },
+      },
+    } as any;
+
+    await provider.authorize(client, {
+      codeChallenge,
+      redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+    }, mockRes);
+
+    const code = new URL(redirectUrl).searchParams.get('code')!;
+    expect(code).toBeTruthy();
+
+    // Mismatched redirect_uri
+    await expect(
+      provider.exchangeAuthorizationCode(
+        client,
+        code,
+        codeVerifier,
+        'https://attacker.com/callback',
+      ),
+    ).rejects.toThrow('Redirect URI mismatch');
+  });
+
+  it('rejects POST /authorize when username is blank', async () => {
+    const client = provider.clientsStore.registerClient({
+      client_name: 'Claude Web Test',
+      redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    });
+
+    let htmlOutput = '';
+    const mockRes = {
+      setHeader: () => {},
+      send: (html: string) => {
+        htmlOutput = html;
+      },
+      redirect: () => {},
+      req: {
+        method: 'POST',
+        body: {
+          username: '',
+          password: 'test_password_123',
+        },
+      },
+    } as any;
+
+    await provider.authorize(client, {
+      codeChallenge: 'test-challenge',
+      redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+    }, mockRes);
+
+    expect(htmlOutput).toContain('Invalid username or password');
   });
 });

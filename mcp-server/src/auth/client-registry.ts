@@ -6,23 +6,47 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidClientMetadataError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
-// Allowed redirect URIs (Claude, ChatGPT, Odysseus, local tooling)
-const ALLOWED_REDIRECT_PATTERNS = [
-  /^https:\/\/(www\.)?claude\.ai\/api\/mcp\/auth_callback$/,
-  /^https:\/\/(www\.)?claude\.com\/api\/mcp\/auth_callback$/,
-  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/,
-  /^http:\/\/localhost:\d+$/, // MCP Inspector
-  /^https:\/\/.*odysseus.*$/,
-  /^https:\/\/.*bieda\.it.*$/,
-  /^https:\/\/(www\.)?chatgpt\.com\/.*$/,
-  /^https:\/\/.*openai\.com\/.*$/,
-];
+// Strict allowed redirect URIs (Claude, ChatGPT, loopback, and trusted domains)
+const EXACT_ALLOWED_REDIRECT_URIS = new Set([
+  'https://claude.ai/api/mcp/auth_callback',
+  'https://www.claude.ai/api/mcp/auth_callback',
+  'https://claude.com/api/mcp/auth_callback',
+  'https://www.claude.com/api/mcp/auth_callback',
+  'https://chatgpt.com/api/mcp/auth_callback',
+  'https://www.chatgpt.com/api/mcp/auth_callback',
+]);
 
-
-function isAllowedRedirectUri(uri: string): boolean {
+export function isAllowedRedirectUri(uriString: string): boolean {
   if (process.env.ALLOW_ALL_REDIRECTS === 'true') return true;
-  return ALLOWED_REDIRECT_PATTERNS.some(p => p.test(uri));
+
+  if (EXACT_ALLOWED_REDIRECT_URIS.has(uriString)) {
+    return true;
+  }
+
+  try {
+    const parsed = new URL(uriString);
+
+    // RFC 8252 §7.3 Loopback Interface Redirection (must be localhost or 127.0.0.1 or [::1])
+    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]') {
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    }
+
+    // Trusted personal infrastructure domains
+    if (parsed.protocol === 'https:') {
+      if (parsed.hostname === 'bieda.it' || parsed.hostname.endsWith('.bieda.it')) {
+        return true;
+      }
+      if (parsed.hostname.endsWith('.tail5d39b4.ts.net')) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
 }
+
 
 export class ClientRegistry implements OAuthRegisteredClientsStore {
   private db: Database.Database;

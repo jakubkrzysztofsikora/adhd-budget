@@ -1,0 +1,117 @@
+name: CI/CD Homelab Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI - Build, Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Secrets Hygiene Check
+        run: |
+          echo "Scanning repository for committed private keys..."
+          ! git grep -E -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' -- ':!.env*' ':!*.example' ':!keys/*' ':!k8s/*' || exit 1
+          echo "No private keys found."
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: mcp-server/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: mcp-server
+        run: npm ci
+
+      - name: TypeScript Build
+        working-directory: mcp-server
+        run: npm run build
+
+      - name: Run Unit and Integration Tests
+        working-directory: mcp-server
+        run: npm test
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build MCP Docker Image Test
+        run: |
+          docker build -t adhd-budget-mcp-server:test .
+
+      - name: Verify Docker Container Health
+        run: |
+          docker run -d --name mcp-test -p 8081:8081 adhd-budget-mcp-server:test
+          sleep 3
+          curl -sf http://localhost:8081/health | grep -q '"status":"ok"'
+          docker rm -f mcp-test
+
+  cd-homelab:
+    name: CD - Deploy to Homelab K3s
+    needs: [ci]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          tags: tag:internal
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Forgejo Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: forgejo.tail5d39b4.ts.net
+          username: ${{ secrets.FORGEJO_REGISTRY_USER }}
+          password: ${{ secrets.FORGEJO_REGISTRY_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            forgejo.tail5d39b4.ts.net/jakub/adhd-budget:latest
+            forgejo.tail5d39b4.ts.net/jakub/adhd-budget:${{ github.sha }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.30.0'
+
+      - name: Configure Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy / Rollout to K3s
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl rollout restart deployment adhd-budget -n adhd-budget
+          kubectl rollout status deployment adhd-budget -n adhd-budget --timeout=180s
+
+      - name: Verify Live Service Health
+        run: |
+          echo "Verifying cluster service health via Tailscale..."
+          curl -sf http://100.69.232.58:30081/health | grep -q '"status":"ok"'
+          echo "Homelab cluster deployment verified successfully!"

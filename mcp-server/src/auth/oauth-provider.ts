@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -25,6 +25,17 @@ function generateToken(): string {
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Constant-time comparison between two strings using SHA-256 digested buffers.
+ * Eliminates side-channel timing leaks during credential verification.
+ */
+function safeCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const hashA = createHash('sha256').update(a).digest();
+  const hashB = createHash('sha256').update(b).digest();
+  return timingSafeEqual(hashA, hashB);
 }
 
 function escapeHtml(str: string): string {
@@ -111,7 +122,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     this.ebClient = enableBankingClient;
     this.staticUsers = staticUsers && staticUsers.size > 0
       ? staticUsers
-      : new Map([['jakub', 'adhd_budget_secret_token_2026']]);
+      : new Map();
     this.defaultUser = defaultUser || 'jakub';
   }
 
@@ -134,17 +145,13 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
 
       let authenticatedUser: string | null = null;
 
-      if (this.staticUsers.size === 1) {
-        // Single user mode: allow matching password even if username is blank or matches
-        const [singleUser, singlePass] = Array.from(this.staticUsers.entries())[0];
-        if ((!username || username.toLowerCase() === singleUser.toLowerCase()) && password === singlePass) {
-          authenticatedUser = singleUser;
-        }
-      } else {
-        // Multi-user mode: exact match on username & password
-        const expectedPass = this.staticUsers.get(username);
-        if (expectedPass && expectedPass === password) {
-          authenticatedUser = username;
+      // Constant-time credential comparison requiring valid non-empty username
+      if (username && password && this.staticUsers.size > 0) {
+        for (const [validUser, validPass] of this.staticUsers.entries()) {
+          if (safeCompare(username.toLowerCase(), validUser.toLowerCase()) && safeCompare(password, validPass)) {
+            authenticatedUser = validUser;
+            break;
+          }
         }
       }
 
@@ -198,10 +205,18 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     const connections = this.sessionStore.getAllBankConnections();
     const totalAccounts = connections.reduce((sum, c) => sum + c.account_uids.length, 0);
 
-    const cancelUrl = new URL(params.redirectUri);
-    cancelUrl.searchParams.set('error', 'access_denied');
-    cancelUrl.searchParams.set('error_description', 'User denied authorization');
-    if (params.state) cancelUrl.searchParams.set('state', params.state);
+    let cancelUrlString = '#';
+    try {
+      const parsedCancel = new URL(params.redirectUri);
+      if (parsedCancel.protocol === 'http:' || parsedCancel.protocol === 'https:') {
+        parsedCancel.searchParams.set('error', 'access_denied');
+        parsedCancel.searchParams.set('error_description', 'User denied authorization');
+        if (params.state) parsedCancel.searchParams.set('state', params.state);
+        cancelUrlString = parsedCancel.toString();
+      }
+    } catch {
+      // Fallback if URL parsing fails
+    }
 
     const html = `<!DOCTYPE html>
 <html lang="en">
@@ -436,7 +451,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       </div>
 
       <div class="actions">
-        <a href="${escapeHtml(cancelUrl.toString())}" class="btn btn-secondary">Deny</a>
+        <a href="${escapeHtml(cancelUrlString)}" class="btn btn-secondary">Deny</a>
         <button type="submit" class="btn btn-primary">Authorize Access</button>
       </div>
     </form>
@@ -476,28 +491,39 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
   ): Promise<OAuthTokens> {
     logger.info({ clientId: client.client_id, hasCode: !!authorizationCode, codeLen: authorizationCode?.length, redirectUri }, 'oauth.token.exchange_started');
     const codeHash = hashToken(authorizationCode);
-    const record = this.db.prepare(
-      'SELECT * FROM auth_codes WHERE code_hash = ? AND used = 0 AND expires_at > ?',
-    ).get(codeHash, Date.now()) as AuthCodeRecord | undefined;
 
-    if (!record) {
-      // Debug: check if code exists at all (maybe expired or used)
-      const anyRecord = this.db.prepare('SELECT used, expires_at FROM auth_codes WHERE code_hash = ?').get(codeHash) as { used: number; expires_at: number } | undefined;
-      logger.warn({ clientId: client.client_id, codeExists: !!anyRecord, used: anyRecord?.used, expired: anyRecord ? Date.now() > anyRecord.expires_at : undefined }, 'oauth.token.invalid_code');
+    // Atomically claim the code (single-use enforcement against TOCTOU race conditions)
+    const updateResult = this.db.prepare(
+      'UPDATE auth_codes SET used = 1 WHERE code_hash = ? AND used = 0 AND expires_at > ?'
+    ).run(codeHash, Date.now());
+
+    if (updateResult.changes === 0) {
+      // Replay detection (RFC 6819 §5.2.1.1): if code was previously used, revoke issued tokens
+      const existing = this.db.prepare('SELECT used, client_id, eb_session_id FROM auth_codes WHERE code_hash = ?').get(codeHash) as { used: number; client_id: string; eb_session_id: string } | undefined;
+      if (existing && existing.used === 1) {
+        logger.error({ clientId: client.client_id }, 'oauth.token.code_reuse_detected');
+        // Revoke all refresh tokens for this client and session to mitigate compromised code
+        this.db.prepare('UPDATE refresh_tokens SET revoked = 1 WHERE client_id = ? AND eb_session_id = ?').run(existing.client_id, existing.eb_session_id);
+      } else {
+        logger.warn({ clientId: client.client_id }, 'oauth.token.invalid_or_expired_code');
+      }
       throw new Error('Invalid or expired authorization code');
     }
 
-    // Mark as used (single-use)
-    this.db.prepare('UPDATE auth_codes SET used = 1 WHERE code_hash = ?').run(codeHash);
+    const record = this.db.prepare('SELECT * FROM auth_codes WHERE code_hash = ?').get(codeHash) as AuthCodeRecord;
 
-    // Verify binding
+    // Verify client binding
     if (record.client_id !== client.client_id) {
       logger.warn({ clientId: client.client_id }, 'oauth.token.client_mismatch');
       throw new Error('Client ID mismatch');
     }
-    if (redirectUri && record.redirect_uri !== redirectUri) {
-      logger.warn({ clientId: client.client_id }, 'oauth.token.redirect_mismatch');
-      throw new Error('Redirect URI mismatch');
+
+    // Verify redirect URI binding (RFC 6749 §4.1.3)
+    if (record.redirect_uri) {
+      if (!redirectUri || record.redirect_uri !== redirectUri) {
+        logger.warn({ clientId: client.client_id }, 'oauth.token.redirect_mismatch');
+        throw new Error('Redirect URI mismatch');
+      }
     }
 
     // Generate tokens

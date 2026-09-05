@@ -44,13 +44,14 @@ if (config.enableAppId && config.enablePrivateKeyPath) {
   }
 }
 
-// Create Express app with DNS rebinding protection
+// Create Express app with DNS rebinding protection for loopback interfaces
 const externalHostname = new URL(config.externalUrl).hostname;
 const allowedHosts = config.host === '0.0.0.0'
   ? undefined
   : ['localhost', '127.0.0.1', 'host.docker.internal', externalHostname];
 const app = createMcpExpressApp({ host: config.host, allowedHosts });
 app.set('trust proxy', 1);
+
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -264,12 +265,13 @@ app.get('/connect', (req, res) => {
       <p style="color:var(--muted);font-size:0.9rem;">Once your banks are linked above, connect any of these AI clients to access your unified finances:</p>
       
       <h3>1. Claude Code CLI</h3>
-      <pre><code>claude mcp add --transport http adhd-budget ${config.externalUrl}/mcp --header "Authorization: Bearer ${config.mcpToken}"</code></pre>
+      <pre><code>claude mcp add --transport http adhd-budget ${config.externalUrl}/mcp --header "Authorization: Bearer &lt;YOUR_MCP_TOKEN&gt;"</code></pre>
 
       <h3>2. Kimi Desktop / Odysseus Web (HTTP API)</h3>
       <p style="font-size:0.85rem;color:var(--muted);">Configure Streamable HTTP transport with Bearer token:</p>
       <pre><code>URL: ${config.externalUrl}/mcp
-Header: Authorization: Bearer ${config.mcpToken}</code></pre>
+Header: Authorization: Bearer &lt;YOUR_MCP_TOKEN&gt;</code></pre>
+
 
       <h3>3. Claude AI (Web & Desktop)</h3>
       <p style="font-size:0.85rem;color:var(--muted);">Add Custom Remote MCP in Claude Settings &rarr; Integrations:</p>
