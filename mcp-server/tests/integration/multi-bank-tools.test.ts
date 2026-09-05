@@ -162,4 +162,63 @@ describe('Multi-Bank MCP Financial Tools', () => {
     expect(data.safe_daily_spend_limit_pln).toBeGreaterThan(0);
     expect(data.status).toBe('on_track');
   });
+
+  it('supports multiple people connecting the same bank and filters by owner', async () => {
+    // Add Karolina's PKO account
+    mockBalances['pko-acc-karolina'] = [{ balance_amount: { amount: '6000.00', currency: 'PLN' }, balance_type: 'CLBD' }];
+    mockTransactions['pko-acc-karolina'] = [
+      {
+        transaction_id: 'tx-k1',
+        transaction_amount: { amount: '-80.00', currency: 'PLN' },
+        booking_date: '2026-09-03',
+        remittance_information_unstructured: 'ROSSMANN KRAKOW',
+      },
+    ];
+
+    sessionStore.saveBankConnection({
+      id: 'pko_bp_karolina',
+      bank_key: 'pko_bp',
+      owner_name: 'Karolina',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'pko-session-karolina',
+      account_uids: ['pko-acc-karolina'],
+      valid_until: '2026-12-01T00:00:00Z',
+    });
+
+    // 1. Snapshot across everyone (Jakub + Karolina)
+    const allSnapshotRes = await client.callTool({ name: 'get_financial_snapshot', arguments: {} });
+    const allSnapshot = JSON.parse((allSnapshotRes.content[0] as { type: 'text'; text: string }).text);
+    // 17350.50 (Jakub) + 6000.00 (Karolina) = 23350.50 PLN
+    expect(allSnapshot.total_liquid_pln).toBe(23350.5);
+    expect(allSnapshot.by_owner?.Jakub?.total_liquid_pln).toBe(17350.5);
+    expect(allSnapshot.by_owner?.Karolina?.total_liquid_pln).toBe(6000.0);
+
+    // 2. Snapshot filtered for Karolina only
+    const karolinaSnapshotRes = await client.callTool({ name: 'get_financial_snapshot', arguments: { owner: 'Karolina' } });
+    const karolinaSnapshot = JSON.parse((karolinaSnapshotRes.content[0] as { type: 'text'; text: string }).text);
+    expect(karolinaSnapshot.total_liquid_pln).toBe(6000.0);
+    expect(karolinaSnapshot.accounts).toHaveLength(1);
+    expect(karolinaSnapshot.accounts[0].owner).toBe('Karolina');
+
+    // 3. Spending analysis with by_owner breakdown
+    const spendRes = await client.callTool({ name: 'get_spending_analysis', arguments: { period: 'this_month' } });
+    const spendData = JSON.parse((spendRes.content[0] as { type: 'text'; text: string }).text);
+    expect(spendData.by_owner?.Karolina?.total_spent_pln).toBe(80.0);
+    expect(spendData.by_owner?.Jakub?.total_spent_pln).toBe(190.5);
+
+    // 4. Accounts tool lists owners
+    const accountsRes = await client.callTool({ name: 'accounts', arguments: {} });
+    const accountsData = JSON.parse((accountsRes.content[0] as { type: 'text'; text: string }).text);
+    const owners = accountsData.accounts.map((a: any) => a.owner);
+    expect(owners).toContain('Jakub');
+    expect(owners).toContain('Karolina');
+
+    // 5. Query transactions filtered by owner
+    const queryRes = await client.callTool({ name: 'query_transactions', arguments: { owner: 'Karolina' } });
+    const queryData = JSON.parse((queryRes.content[0] as { type: 'text'; text: string }).text);
+    expect(queryData.count).toBe(1);
+    expect(queryData.transactions[0].owner).toBe('Karolina');
+    expect(queryData.transactions[0].merchant).toBe('Rossmann');
+  });
 });

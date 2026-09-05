@@ -58,7 +58,7 @@ app.use(express.urlencoded({ extended: false }));
 
 
 // In-memory pending connects for /connect/start -> /auth/eb-callback
-const pendingConnects = new Map<string, { bankKey: string; aspspName: string; aspspCountry: string; createdAt: number }>();
+const pendingConnects = new Map<string, { bankKey: string; aspspName: string; aspspCountry: string; ownerName: string; createdAt: number }>();
 
 // Health endpoint (unauthenticated)
 app.get('/health', async (_req, res) => {
@@ -85,8 +85,10 @@ app.get('/health', async (_req, res) => {
     ebApiError: ebApiError || undefined,
     externalUrl: config.externalUrl,
     connected_banks: connectedBanks.map(b => ({
+      id: b.id,
       bank: b.aspsp_name,
       key: b.bank_key,
+      owner: b.owner_name,
       accounts: b.account_uids.length,
       valid_until: b.valid_until,
     })),
@@ -99,7 +101,6 @@ app.get('/health', async (_req, res) => {
 
 app.get('/connect', (req, res) => {
   const connected = sessionStore.getAllBankConnections();
-  const connectedMap = new Map(connected.map(c => [c.bank_key, c]));
   const statusMsg = req.query.status as string | undefined;
   const bankParam = req.query.bank as string | undefined;
   const errorMsg = req.query.message as string | undefined;
@@ -208,37 +209,66 @@ app.get('/connect', (req, res) => {
   <div class="container">
     <header>
       <h1>🏦 ADHD Budget — Polish Bank Hub</h1>
-      <p class="sub">Connect and manage your Polish bank accounts safely for AI assistants.</p>
+      <p class="sub">Connect and manage Polish bank accounts across multiple household members safely for AI assistants.</p>
     </header>
 
     ${statusMsg === 'connected' ? `<div class="alert alert-success">✅ Successfully connected <strong>${bankParam || 'bank'}</strong>!</div>` : ''}
     ${statusMsg === 'disconnected' ? `<div class="alert alert-success">Disconnected <strong>${bankParam || 'bank'}</strong>.</div>` : ''}
     ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error connecting bank: ${errorMsg || 'Authentication failed'}</div>` : ''}
 
+    <h2 style="font-size: 1.2rem; margin: 0 0 1rem 0;">Connected Bank Accounts</h2>
     <div class="card-list">
-      ${SUPPORTED_BANKS.map(bank => {
-        const conn = connectedMap.get(bank.key);
-        const isConnected = !!conn;
-        const daysLeft = conn ? Math.round((new Date(conn.valid_until).getTime() - Date.now()) / (24 * 3600 * 1000)) : 0;
+      ${connected.length > 0 ? connected.map(conn => {
+        const daysLeft = Math.round((new Date(conn.valid_until).getTime() - Date.now()) / (24 * 3600 * 1000));
         return `
         <div class="bank-card">
           <div class="bank-info">
-            <h3>${bank.title}</h3>
+            <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+              ${conn.aspsp_name}
+              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${conn.owner_name}</span>
+            </h3>
             <div class="meta">
-              ${isConnected 
-                ? `<span class="badge badge-active">Active (${daysLeft} days left)</span> ${conn.account_uids.length} account(s) synced` 
-                : `<span class="badge badge-none">Not Connected</span>`}
+              <span class="badge badge-active">Active (${daysLeft} days left)</span> ${conn.account_uids.length} account(s) synced
             </div>
           </div>
-          <div>
-            ${isConnected
-              ? `<a href="/connect/start?bank=${bank.key}" class="btn btn-secondary">Refresh</a>
-                 <a href="/connect/disconnect?bank=${bank.key}" class="btn btn-danger" onclick="return confirm('Disconnect this bank?')">Disconnect</a>`
-              : `<a href="/connect/start?bank=${bank.key}" class="btn">Connect</a>`}
+          <div style="display: flex; gap: 0.5rem;">
+            <a href="/connect/start?bank=${conn.bank_key}&owner=${encodeURIComponent(conn.owner_name)}" class="btn btn-secondary">Refresh</a>
+            <a href="/connect/disconnect?id=${encodeURIComponent(conn.id)}" class="btn btn-danger" onclick="return confirm('Disconnect ${conn.aspsp_name} (${conn.owner_name})?')">Disconnect</a>
           </div>
         </div>
         `;
-      }).join('')}
+      }).join('') : `
+        <div style="background: var(--card); border: 1px dashed var(--border); border-radius: 10px; padding: 1.5rem; text-align: center; color: var(--muted);">
+          No bank accounts connected yet. Connect an account below!
+        </div>
+      `}
+    </div>
+
+    <div style="margin-bottom: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem;">
+      <h3 style="margin-top: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
+        <span>➕</span> Connect a Bank Account (via Bank SCA Login)
+      </h3>
+      <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
+        Select a bank and specify who this account belongs to. Multiple people (e.g. household members) can connect accounts from the same bank:
+      </p>
+      <form action="/connect/start" method="GET" style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+        <select 
+          name="bank" 
+          required 
+          style="flex: 1; min-width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
+        >
+          ${SUPPORTED_BANKS.map(b => `<option value="${b.key}">${b.title}</option>`).join('')}
+        </select>
+        <input 
+          type="text" 
+          name="owner" 
+          placeholder="Owner name (e.g. Jakub, Karolina)" 
+          value="Jakub" 
+          required 
+          style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
+        />
+        <button type="submit" class="btn" style="white-space: nowrap;">Connect via Bank &rarr;</button>
+      </form>
     </div>
 
     <div style="margin-bottom: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem;">
@@ -246,15 +276,23 @@ app.get('/connect', (req, res) => {
         <span>⚡</span> Direct Import via Enable Banking Session ID
       </h3>
       <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
-        Already linked your accounts in the <a href="https://enablebanking.com/cp/" target="_blank" style="color: var(--primary); text-decoration: underline;">Enable Banking Control Panel</a>? Paste the <code>session_id</code> from your Control Panel logs (Applications &rarr; ADHD budget &rarr; Request Logs):
+        Already linked your accounts in the <a href="https://enablebanking.com/cp/" target="_blank" style="color: var(--primary); text-decoration: underline;">Enable Banking Control Panel</a>? Paste the <code>session_id</code> and specify the account owner:
       </p>
-      <form action="/connect/import-session" method="POST" style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+      <form action="/connect/import-session" method="POST" style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
         <input 
           type="text" 
           name="session_id" 
           placeholder="Paste session_id (e.g. 1a2b3c4d-5e6f-...)" 
           required 
-          style="flex: 1; min-width: 280px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem; font-family: monospace;"
+          style="flex: 1; min-width: 260px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem; font-family: monospace;"
+        />
+        <input 
+          type="text" 
+          name="owner_name" 
+          placeholder="Owner name (e.g. Jakub, Karolina)" 
+          value="Jakub" 
+          required 
+          style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
         <button type="submit" class="btn" style="white-space: nowrap;">Import Session</button>
       </form>
@@ -290,6 +328,7 @@ Header: Authorization: Bearer &lt;YOUR_MCP_TOKEN&gt;</code></pre>
 // Start bank SCA connection
 app.get('/connect/start', async (req, res) => {
   const bankKey = req.query.bank as string;
+  const ownerName = (req.query.owner as string || 'Jakub').trim() || 'Jakub';
   if (!ebClient) {
     res.status(500).send('Enable Banking client not initialized. Check server credentials.');
     return;
@@ -309,6 +348,7 @@ app.get('/connect/start', async (req, res) => {
       bankKey: bankDef.key,
       aspspName: bankDef.name,
       aspspCountry: bankDef.country,
+      ownerName,
       createdAt: Date.now(),
     });
 
@@ -320,22 +360,24 @@ app.get('/connect/start', async (req, res) => {
       'personal',
     );
 
-    logger.info({ bank: bankDef.name, redirect: ebResponse.url }, 'connect_start_redirecting_to_bank');
+    logger.info({ bank: bankDef.name, owner: ownerName, redirect: ebResponse.url }, 'connect_start_redirecting_to_bank');
     res.redirect(ebResponse.url);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    logger.error({ err: errMsg, bank: bankKey }, 'connect_start_failed');
+    logger.error({ err: errMsg, bank: bankKey, owner: ownerName }, 'connect_start_failed');
     res.redirect(`/connect?status=error&message=${encodeURIComponent(errMsg)}`);
   }
 });
 
 // Disconnect bank
 app.get('/connect/disconnect', (req, res) => {
-  const bankKey = req.query.bank as string;
-  if (bankKey) {
-    sessionStore.deleteBankConnection(bankKey);
+  const id = req.query.id as string | undefined;
+  const bankKey = req.query.bank as string | undefined;
+  const target = id || bankKey;
+  if (target) {
+    sessionStore.deleteBankConnection(target);
   }
-  res.redirect(`/connect?status=disconnected&bank=${encodeURIComponent(bankKey || '')}`);
+  res.redirect(`/connect?status=disconnected&bank=${encodeURIComponent(target || '')}`);
 });
 
 function matchBankKey(aspspName: string): string {
@@ -356,6 +398,7 @@ function matchBankKey(aspspName: string): string {
 // Direct import of existing session ID from Enable Banking Control Panel
 app.post('/connect/import-session', async (req, res) => {
   const sessionId = (req.body.session_id as string || '').trim();
+  const ownerName = (req.body.owner_name as string || 'Jakub').trim() || 'Jakub';
   if (!sessionId) {
     res.redirect('/connect?status=error&message=Missing+session_id');
     return;
@@ -374,7 +417,9 @@ app.post('/connect/import-session', async (req, res) => {
     const accountUids = accounts.map((a: unknown) => typeof a === 'string' ? a : ((a as { uid?: string; account_id?: string })?.uid || (a as { uid?: string; account_id?: string })?.account_id || String(a)));
 
     sessionStore.saveBankConnection({
+      id: `${bankKey}_${ownerName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
       bank_key: bankKey,
+      owner_name: ownerName,
       aspsp_name: aspspName,
       aspsp_country: aspspCountry,
       session_id: fullSession.session_id,
@@ -383,8 +428,8 @@ app.post('/connect/import-session', async (req, res) => {
       valid_until: fullSession.valid_until || new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
     });
 
-    logger.info({ bank: aspspName, sessionId, accounts: accountUids.length }, 'session_imported_successfully');
-    res.redirect(`/connect?status=connected&bank=${encodeURIComponent(aspspName)}`);
+    logger.info({ bank: aspspName, owner: ownerName, sessionId, accounts: accountUids.length }, 'session_imported_successfully');
+    res.redirect(`/connect?status=connected&bank=${encodeURIComponent(`${aspspName} (${ownerName})`)}`);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     logger.error({ err: errMsg, sessionId }, 'session_import_failed');
@@ -432,7 +477,9 @@ if (oauthProvider) {
         const accountUids = accounts.map((a: unknown) => typeof a === 'string' ? a : ((a as { uid?: string; account_id?: string })?.uid || (a as { uid?: string; account_id?: string })?.account_id || String(a)));
 
         sessionStore.saveBankConnection({
+          id: `${pending.bankKey}_${pending.ownerName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
           bank_key: pending.bankKey,
+          owner_name: pending.ownerName,
           aspsp_name: fullSession.aspsp?.name || pending.aspspName,
           aspsp_country: fullSession.aspsp?.country || pending.aspspCountry,
           session_id: session.session_id,
@@ -441,8 +488,8 @@ if (oauthProvider) {
           valid_until: fullSession.valid_until || new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
         });
 
-        logger.info({ bank: pending.aspspName, accounts: accountUids.length }, 'bank_connected_successfully');
-        res.redirect(`/connect?status=connected&bank=${encodeURIComponent(pending.aspspName)}`);
+        logger.info({ bank: pending.aspspName, owner: pending.ownerName, accounts: accountUids.length }, 'bank_connected_successfully');
+        res.redirect(`/connect?status=connected&bank=${encodeURIComponent(`${pending.aspspName} (${pending.ownerName})`)}`);
         return;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);

@@ -84,4 +84,103 @@ describe('SessionStore', () => {
       expect(record!.eb_session_id).toBe(`eb-${i}`);
     }
   });
+
+  it('allows multiple people to connect accounts from the same bank without overwriting', () => {
+    // Jakub connects PKO Bank Polski
+    const id1 = store.saveBankConnection({
+      bank_key: 'pko_bp',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'session-jakub-pko',
+      account_uids: ['acc-jakub-pko-1', 'acc-jakub-pko-2'],
+      owner_name: 'Jakub',
+      valid_until: '2026-12-01T00:00:00Z',
+    });
+
+    // Karolina also connects PKO Bank Polski
+    const id2 = store.saveBankConnection({
+      bank_key: 'pko_bp',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'session-karolina-pko',
+      account_uids: ['acc-karolina-pko-1'],
+      owner_name: 'Karolina',
+      valid_until: '2026-12-01T00:00:00Z',
+    });
+
+    expect(id1).not.toBe(id2);
+
+    const all = store.getAllBankConnections();
+    expect(all).toHaveLength(2);
+
+    const jakubConn = all.find(c => c.owner_name === 'Jakub');
+    const karolinaConn = all.find(c => c.owner_name === 'Karolina');
+
+    expect(jakubConn).toBeDefined();
+    expect(jakubConn!.bank_key).toBe('pko_bp');
+    expect(jakubConn!.account_uids).toEqual(['acc-jakub-pko-1', 'acc-jakub-pko-2']);
+
+    expect(karolinaConn).toBeDefined();
+    expect(karolinaConn!.bank_key).toBe('pko_bp');
+    expect(karolinaConn!.account_uids).toEqual(['acc-karolina-pko-1']);
+
+    // Test owner filtering
+    const onlyKarolina = store.getAllBankConnections('Karolina');
+    expect(onlyKarolina).toHaveLength(1);
+    expect(onlyKarolina[0].owner_name).toBe('Karolina');
+
+    // Deleting Karolina's connection leaves Jakub's intact
+    store.deleteBankConnection(id2);
+    const afterDelete = store.getAllBankConnections();
+    expect(afterDelete).toHaveLength(1);
+    expect(afterDelete[0].owner_name).toBe('Jakub');
+  });
+
+  it('migrates legacy bank_connections schema seamlessly', () => {
+    const legacyDbPath = `./data/test-legacy-${randomUUID()}.db`;
+    const Database = require('better-sqlite3');
+    const db = new Database(legacyDbPath);
+    // Create old schema
+    db.exec(`
+      CREATE TABLE bank_connections (
+        bank_key TEXT PRIMARY KEY,
+        aspsp_name TEXT NOT NULL,
+        aspsp_country TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        account_uids TEXT NOT NULL,
+        accounts_data TEXT NOT NULL DEFAULT '[]',
+        valid_until TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO bank_connections (bank_key, aspsp_name, aspsp_country, session_id, account_uids, valid_until, created_at, updated_at)
+      VALUES ('pko_bp', 'PKO Bank Polski', 'PL', 'legacy-sess-1', '["legacy-acc-1"]', '2026-12-01', 1000, 1000);
+    `);
+    db.close();
+
+    // Now open via SessionStore (triggers migration)
+    const migratedStore = new SessionStore(legacyDbPath);
+    const conns = migratedStore.getAllBankConnections();
+    expect(conns).toHaveLength(1);
+    expect(conns[0].bank_key).toBe('pko_bp');
+    expect(conns[0].session_id).toBe('legacy-sess-1');
+    expect(conns[0].owner_name).toBe('Jakub');
+    expect(conns[0].id).toBe('pko_bp_jakub');
+
+    // Now adding a new person to the same bank works after migration
+    migratedStore.saveBankConnection({
+      bank_key: 'pko_bp',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'new-karolina-sess',
+      account_uids: ['karolina-acc'],
+      owner_name: 'Karolina',
+      valid_until: '2026-12-01',
+    });
+
+    const both = migratedStore.getAllBankConnections();
+    expect(both).toHaveLength(2);
+    migratedStore.close();
+    if (existsSync(legacyDbPath)) unlinkSync(legacyDbPath);
+  });
 });

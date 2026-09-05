@@ -410,7 +410,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       </div>
       ${connections.length > 0 ? connections.map(c => `
         <div class="bank-item">
-          <span>${escapeHtml(c.aspsp_name)}</span>
+          <span>${escapeHtml(c.aspsp_name)} <span style="font-size: 0.8em; color: var(--muted);">(${escapeHtml(c.owner_name)})</span></span>
           <span class="count">${c.account_uids.length} account(s)</span>
         </div>
       `).join('') : '<div style="color: var(--muted);">No bank accounts linked yet. Link them in the Bank Hub.</div>'}

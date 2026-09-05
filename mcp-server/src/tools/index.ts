@@ -55,9 +55,10 @@ interface AccountTarget {
   bank: string;
   accountId: string;
   aspspName: string;
+  ownerName: string;
 }
 
-function resolveAccountTargets(ctx?: ToolContext, bankFilter?: string): AccountTarget[] {
+function resolveAccountTargets(ctx?: ToolContext, bankFilter?: string, ownerFilter?: string): AccountTarget[] {
   const targets: AccountTarget[] = [];
   const sessionStore = ctx?.getSessionStore?.();
 
@@ -67,8 +68,16 @@ function resolveAccountTargets(ctx?: ToolContext, bankFilter?: string): AccountT
       if (bankFilter && conn.bank_key !== bankFilter && !conn.aspsp_name.toLowerCase().includes(bankFilter.toLowerCase())) {
         continue;
       }
+      if (ownerFilter && !conn.owner_name.toLowerCase().includes(ownerFilter.toLowerCase())) {
+        continue;
+      }
       for (const accId of conn.account_uids) {
-        targets.push({ bank: conn.bank_key, accountId: accId, aspspName: conn.aspsp_name });
+        targets.push({
+          bank: conn.bank_key,
+          accountId: accId,
+          aspspName: conn.aspsp_name,
+          ownerName: conn.owner_name,
+        });
       }
     }
   }
@@ -77,7 +86,7 @@ function resolveAccountTargets(ctx?: ToolContext, bankFilter?: string): AccountT
   if (targets.length === 0 && ctx) {
     const uids = ctx.getAccountUids();
     for (const uid of uids) {
-      targets.push({ bank: 'active_session', accountId: uid, aspspName: 'Connected Bank' });
+      targets.push({ bank: 'active_session', accountId: uid, aspspName: 'Connected Bank', ownerName: 'Jakub' });
     }
   }
 
@@ -119,17 +128,19 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
   server.tool(
     'get_financial_snapshot',
-    'Get unified snapshot of all liquid balances and bank connections across PKO BP, Nest Bank, and Revolut',
-    {},
-    async () => {
+    'Get unified snapshot of all liquid balances and bank connections across all connected accounts and family members',
+    {
+      owner: z.string().optional().describe('Optional filter by account owner / person (e.g. Jakub, Karolina)'),
+    },
+    async ({ owner }) => {
       const client = ctx?.getClient();
       if (!client) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Enable Banking client not initialized' }) }], isError: true };
       }
 
-      const targets = resolveAccountTargets(ctx);
+      const targets = resolveAccountTargets(ctx, undefined, owner);
       const sessionStore = ctx?.getSessionStore?.();
-      const connections = sessionStore?.getAllBankConnections() || [];
+      const connections = sessionStore?.getAllBankConnections(owner) || [];
 
       let totalPln = 0;
       let totalEur = 0;
@@ -145,6 +156,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
             else if (curr === 'EUR') totalEur += amt;
 
             accountsSummary.push({
+              owner: target.ownerName,
               bank: target.aspspName,
               account_id: target.accountId,
               balance_type: b.balance_type,
@@ -154,6 +166,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
           }
         } catch (err) {
           accountsSummary.push({
+            owner: target.ownerName,
             bank: target.aspspName,
             account_id: target.accountId,
             error: err instanceof Error ? err.message : String(err),
@@ -161,15 +174,31 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
         }
       }
 
+      // Group totals by owner / person
+      const byOwner: Record<string, { total_liquid_pln: number; total_liquid_eur: number; accounts_count: number }> = {};
+      for (const acc of accountsSummary) {
+        const o = (acc.owner as string) || 'Default';
+        if (!byOwner[o]) byOwner[o] = { total_liquid_pln: 0, total_liquid_eur: 0, accounts_count: 0 };
+        byOwner[o].accounts_count++;
+        if (acc.currency === 'PLN' && typeof acc.amount === 'number') {
+          byOwner[o].total_liquid_pln = Math.round((byOwner[o].total_liquid_pln + acc.amount) * 100) / 100;
+        } else if (acc.currency === 'EUR' && typeof acc.amount === 'number') {
+          byOwner[o].total_liquid_eur = Math.round((byOwner[o].total_liquid_eur + acc.amount) * 100) / 100;
+        }
+      }
+
       const result = {
         total_liquid_pln: Math.round(totalPln * 100) / 100,
         total_liquid_eur: Math.round(totalEur * 100) / 100,
+        by_owner: Object.keys(byOwner).length > 1 || owner ? byOwner : undefined,
         connected_banks: connections.map(c => {
           const expiresAt = new Date(c.valid_until).getTime();
           const daysLeft = Math.round((expiresAt - Date.now()) / (24 * 3600 * 1000));
           return {
+            id: c.id,
             bank: c.aspsp_name,
             key: c.bank_key,
+            owner: c.owner_name,
             accounts_count: c.account_uids.length,
             consent_valid_until: c.valid_until,
             days_remaining: daysLeft,
@@ -185,18 +214,19 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
   server.tool(
     'get_spending_analysis',
-    'Analyze spending velocity, top Polish merchants, outlier impulse buys, and internal transfer deduplication',
+    'Analyze spending velocity, top Polish merchants, outlier impulse buys, and internal transfer deduplication across all family members or by person',
     {
       period: z.enum(['today', 'yesterday', 'this_week', 'this_month', 'last_30_days']).default('this_month').describe('Time period for analysis'),
       bank: z.string().optional().describe('Optional bank filter (e.g. pko_bp, nest_bank, revolut)'),
+      owner: z.string().optional().describe('Optional person/owner filter (e.g. Jakub, Karolina)'),
     },
-    async ({ period, bank }) => {
+    async ({ period, bank, owner }) => {
       const client = ctx?.getClient();
       if (!client) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Enable Banking client not initialized' }) }], isError: true };
       }
 
-      const targets = resolveAccountTargets(ctx, bank);
+      const targets = resolveAccountTargets(ctx, bank, owner);
       const { dateFrom, dateTo, days } = calculateDateRange(period);
 
       const allCleanTxs: CleanTransaction[] = [];
@@ -215,6 +245,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
               id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
               bank: target.aspspName,
               account_id: target.accountId,
+              owner: target.ownerName,
               date: tx.booking_date || tx.value_date || dateTo,
               amount: rawAmount,
               currency: tx.transaction_amount.currency,
@@ -237,21 +268,22 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
   server.tool(
     'query_transactions',
-    'Search and filter transactions across all connected banks (PKO BP, Nest Bank, Revolut)',
+    'Search and filter transactions across all connected banks and family members (PKO BP, Nest Bank, Revolut)',
     {
       query: z.string().optional().describe('Text search for merchant, title, or keyword'),
       bank: z.string().optional().describe('Filter by bank (e.g. pko_bp, nest_bank, revolut)'),
+      owner: z.string().optional().describe('Optional person/owner filter (e.g. Jakub, Karolina)'),
       date_from: z.string().optional().describe('Start date (YYYY-MM-DD)'),
       date_to: z.string().optional().describe('End date (YYYY-MM-DD)'),
       limit: z.number().default(25).describe('Max results to return (default 25)'),
     },
-    async ({ query, bank, date_from, date_to, limit }) => {
+    async ({ query, bank, owner, date_from, date_to, limit }) => {
       const client = ctx?.getClient();
       if (!client) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Enable Banking client not initialized' }) }], isError: true };
       }
 
-      const targets = resolveAccountTargets(ctx, bank);
+      const targets = resolveAccountTargets(ctx, bank, owner);
       const results: CleanTransaction[] = [];
       const lowerQuery = query ? query.toLowerCase() : null;
 
@@ -273,6 +305,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
               id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
               bank: target.aspspName,
               account_id: target.accountId,
+              owner: target.ownerName,
               date: tx.booking_date || tx.value_date || '',
               amount: rawAmount,
               currency: tx.transaction_amount.currency,
@@ -297,17 +330,18 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
   server.tool(
     'get_recurring_bills',
-    'Detect recurring subscriptions, media, gym, rent, and utility bills across all accounts',
+    'Detect recurring subscriptions, media, gym, rent, and utility bills across all accounts and members',
     {
       bank: z.string().optional().describe('Optional bank filter'),
+      owner: z.string().optional().describe('Optional person/owner filter (e.g. Jakub, Karolina)'),
     },
-    async ({ bank }) => {
+    async ({ bank, owner }) => {
       const client = ctx?.getClient();
       if (!client) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Enable Banking client not initialized' }) }], isError: true };
       }
 
-      const targets = resolveAccountTargets(ctx, bank);
+      const targets = resolveAccountTargets(ctx, bank, owner);
       const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const allTxs: CleanTransaction[] = [];
 
@@ -324,6 +358,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
               id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
               bank: target.aspspName,
               account_id: target.accountId,
+              owner: target.ownerName,
               date: tx.booking_date || tx.value_date || '',
               amount: rawAmount,
               currency: tx.transaction_amount.currency,
@@ -349,14 +384,16 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
   server.tool(
     'get_cashflow_forecast',
     'Calculate burn rate, safe daily spend allowance, and projected month-end balance',
-    {},
-    async () => {
+    {
+      owner: z.string().optional().describe('Optional filter by account owner (e.g., "Jakub", "Karolina")'),
+    },
+    async ({ owner }) => {
       const client = ctx?.getClient();
       if (!client) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Enable Banking client not initialized' }) }], isError: true };
       }
 
-      const targets = resolveAccountTargets(ctx);
+      const targets = resolveAccountTargets(ctx, undefined, owner);
 
       // 1. Get liquid balance
       let totalLiquidPln = 0;
@@ -394,6 +431,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
               id: tx.entry_reference || tx.transaction_id || '',
               bank: target.aspspName,
               account_id: target.accountId,
+              owner: target.ownerName,
               date: tx.booking_date || '',
               amount: rawAmount,
               currency: tx.transaction_amount.currency,
@@ -419,32 +457,43 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
   // Low-Level Data Passthrough Tools (Legacy/Raw)
   // ==========================================
 
-  server.tool('accounts', 'List all connected accounts with their IDs and types', {}, async () => {
-    const client = ctx?.getClient();
-    const sessionId = ctx?.getSessionId();
-    const sessionStore = ctx?.getSessionStore?.();
+  server.tool(
+    'accounts',
+    'List all connected accounts with their IDs, types, bank names, and owners',
+    {
+      owner: z.string().optional().describe('Optional filter by account owner (e.g., "Jakub", "Karolina")'),
+    },
+    async ({ owner }) => {
+      const client = ctx?.getClient();
+      const sessionId = ctx?.getSessionId();
+      const sessionStore = ctx?.getSessionStore?.();
 
-    if (!client) {
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: [], note: 'Not authenticated with bank' }) }] };
-    }
-
-    try {
-      if (sessionStore) {
-        const conns = sessionStore.getAllBankConnections();
-        const allAccounts = conns.flatMap(c => c.accounts_data.length > 0 ? c.accounts_data : c.account_uids.map(u => ({ uid: u, bank: c.aspsp_name })));
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: allAccounts }, null, 2) }] };
+      if (!client) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: [], note: 'Not authenticated with bank' }) }] };
       }
 
-      if (sessionId) {
-        const session = await client.getSession(sessionId);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: session.accounts }, null, 2) }] };
-      }
+      try {
+        if (sessionStore) {
+          const conns = sessionStore.getAllBankConnections(owner);
+          const allAccounts = conns.flatMap(c =>
+            c.accounts_data.length > 0
+              ? c.accounts_data.map((acc: any) => ({ ...acc, bank: c.aspsp_name, owner: c.owner_name }))
+              : c.account_uids.map(u => ({ uid: u, bank: c.aspsp_name, owner: c.owner_name }))
+          );
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: allAccounts }, null, 2) }] };
+        }
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: [] }) }] };
-    } catch (err) {
-      return { content: [{ type: 'text' as const, text: `Error fetching accounts: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
-    }
-  });
+        if (sessionId) {
+          const session = await client.getSession(sessionId);
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: session.accounts }, null, 2) }] };
+        }
+
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: [] }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error fetching accounts: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    },
+  );
 
   server.tool(
     'balances',

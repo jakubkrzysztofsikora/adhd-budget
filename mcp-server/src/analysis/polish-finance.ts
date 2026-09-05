@@ -2,6 +2,7 @@ export interface CleanTransaction {
   id: string;
   bank: string;
   account_id: string;
+  owner?: string;
   date: string;
   amount: number;
   currency: string;
@@ -24,6 +25,7 @@ export interface SpendingAnalysis {
   transaction_count: number;
   top_merchants: Array<{ merchant: string; category: string; amount: number; count: number }>;
   categories_breakdown: Record<string, number>;
+  by_owner?: Record<string, { total_spent_pln: number; transaction_count: number }>;
   outliers: CleanTransaction[];
   internal_transfers_excluded: Array<{ merchant: string; amount: number; date: string }>;
 }
@@ -35,6 +37,7 @@ export interface SubscriptionItem {
   occurrences: number;
   last_date: string;
   frequency: 'monthly' | 'weekly' | 'irregular';
+  owner?: string;
 }
 
 export interface CashflowForecast {
@@ -249,6 +252,15 @@ export function analyzeSpending(transactions: CleanTransaction[], period: string
   const dateFrom = dates[0] || new Date().toISOString().slice(0, 10);
   const dateTo = dates[dates.length - 1] || new Date().toISOString().slice(0, 10);
 
+  const byOwner: Record<string, { total_spent_pln: number; transaction_count: number }> = {};
+  for (const tx of spentTransactions) {
+    if (tx.owner) {
+      if (!byOwner[tx.owner]) byOwner[tx.owner] = { total_spent_pln: 0, transaction_count: 0 };
+      byOwner[tx.owner].total_spent_pln = Math.round((byOwner[tx.owner].total_spent_pln + Math.abs(tx.amount)) * 100) / 100;
+      byOwner[tx.owner].transaction_count += 1;
+    }
+  }
+
   return {
     period,
     date_from: dateFrom,
@@ -259,19 +271,20 @@ export function analyzeSpending(transactions: CleanTransaction[], period: string
     transaction_count: spentTransactions.length,
     top_merchants: topMerchants,
     categories_breakdown: categoryMap,
+    by_owner: Object.keys(byOwner).length > 0 ? byOwner : undefined,
     outliers,
     internal_transfers_excluded: internalTransfers,
   };
 }
 
 export function detectSubscriptions(transactions: CleanTransaction[]): SubscriptionItem[] {
-  const byMerchant = new Map<string, Array<{ amount: number; date: string; category: string }>>();
+  const byMerchant = new Map<string, Array<{ amount: number; date: string; category: string; owner?: string }>>();
 
   for (const tx of transactions) {
     if (tx.is_internal_transfer || tx.is_income || tx.amount >= 0) continue;
     const abs = Math.abs(tx.amount);
     const list = byMerchant.get(tx.merchant) || [];
-    list.push({ amount: abs, date: tx.date, category: tx.category });
+    list.push({ amount: abs, date: tx.date, category: tx.category, owner: tx.owner });
     byMerchant.set(tx.merchant, list);
   }
 
@@ -294,6 +307,7 @@ export function detectSubscriptions(transactions: CleanTransaction[]): Subscript
           occurrences: history.length,
           last_date: latest.date,
           frequency: 'monthly',
+          owner: latest.owner,
         });
       }
     }
