@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adhd-budget
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: adhd-budget-data
+  namespace: adhd-budget
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adhd-budget
+  namespace: adhd-budget
+spec:
+  type: NodePort
+  ports:
+    - port: 8081
+      targetPort: 8081
+      nodePort: 30081
+      name: http
+  selector:
+    app: adhd-budget
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adhd-budget
+  namespace: adhd-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adhd-budget
+  template:
+    metadata:
+      labels:
+        app: adhd-budget
+    spec:
+      imagePullSecrets:
+        - name: forgejo-registry-cred
+      containers:
+        - name: adhd-budget
+          image: forgejo.tail5d39b4.ts.net/jakub/adhd-budget:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+              name: http
+          env:
+            - name: PORT
+              value: "8081"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: DATA_DIR
+              value: "/app/data"
+            - name: ENABLE_PRIVATE_KEY_PATH
+              value: "/app/keys/enablebanking_private.pem"
+            - name: ENABLE_API_BASE_URL
+              value: "https://api.enablebanking.com"
+            - name: EXTERNAL_URL
+              value: "https://adhdbudget.bieda.it"
+            - name: ENABLE_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: adhd-budget-secrets
+                  key: ENABLE_APP_ID
+            - name: MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: adhd-budget-secrets
+                  key: MCP_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: keys
+              mountPath: /app/keys
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: adhd-budget-data
+        - name: keys
+          secret:
+            secretName: adhd-budget-keys

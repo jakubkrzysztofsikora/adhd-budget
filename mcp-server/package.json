@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest run tests/integration/",
     "test:e2e": "vitest run tests/e2e/",
-    "test:all": "vitest run"
+    "test:all": "vitest run",
+    "import-session": "tsx src/scripts/import-session.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -6,16 +6,18 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidClientMetadataError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
-// Only allow Claude's known redirect URIs
+// Allowed redirect URIs (Claude, Odysseus, local tooling)
 const ALLOWED_REDIRECT_PATTERNS = [
   /^https:\/\/(www\.)?claude\.ai\/api\/mcp\/auth_callback$/,
   /^https:\/\/(www\.)?claude\.com\/api\/mcp\/auth_callback$/,
-  /^http:\/\/(localhost|127\.0\.0\.1):\d+\/callback$/,
-  /^http:\/\/(localhost|127\.0\.0\.1):\d+\/oauth\/callback$/,
-  /^http:\/\/localhost:\d+$/,  // MCP Inspector
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/,
+  /^http:\/\/localhost:\d+$/, // MCP Inspector
+  /^https:\/\/.*odysseus.*$/,
+  /^https:\/\/.*bieda\.it.*$/,
 ];
 
 function isAllowedRedirectUri(uri: string): boolean {
+  if (process.env.ALLOW_ALL_REDIRECTS === 'true') return true;
   return ALLOWED_REDIRECT_PATTERNS.some(p => p.test(uri));
 }
 

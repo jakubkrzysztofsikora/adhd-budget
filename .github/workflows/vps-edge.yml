@@ -1,0 +1,54 @@
+name: VPS Edge Operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Shell command or action to run on VPS'
+        required: true
+        default: 'inspect'
+        type: string
+
+jobs:
+  run-vps:
+    name: Execute on VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run command via SSH
+        uses: appleboy/ssh-action@v0.1.8
+        env:
+          CMD_INPUT: ${{ inputs.command }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_SSH_PASSWORD }}
+          port: ${{ secrets.VPS_SSH_PORT }}
+          envs: CMD_INPUT
+          script: |
+            set -e
+            echo "=== RUNNING COMMAND ON VPS ==="
+            echo "User: $(whoami)"
+            echo "Hostname: $(hostname)"
+            echo "IP: $(hostname -I 2>/dev/null || true)"
+            
+            if [ "$CMD_INPUT" = "inspect" ]; then
+              echo "=== DOCKER CONTAINERS ==="
+              docker ps -a
+              
+              echo "=== TAILSCALE STATUS ==="
+              tailscale status 2>&1 || echo "tailscale CLI not found or inactive"
+              
+              echo "=== CONNECTIVITY TO K3S (100.69.232.58:30081) ==="
+              curl -s -o /dev/null -w "K3S Health HTTP Status: %{http_code}\n" --connect-timeout 5 http://100.69.232.58:30081/health || echo "Direct curl to k3s failed"
+              
+              echo "=== CHECKING OLD SESSIONS.DB ON VPS ==="
+              find /home/${USER}/adhd-budget /var/lib/docker/volumes/ -name "sessions.db" -o -name "oauth.db" 2>/dev/null || true
+              
+              if docker ps -q --filter name=mcp-server | grep -q .; then
+                echo "=== DUMPING SESSIONS FROM RUNNING MCP CONTAINER ==="
+                docker exec $(docker ps -q --filter name=mcp-server | head -1) ls -la /app/data/ 2>/dev/null || true
+              fi
+            else
+              echo "Executing custom command: $CMD_INPUT"
+              eval "$CMD_INPUT"
+            fi

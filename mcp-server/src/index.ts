@@ -9,13 +9,17 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createLogger } from './logger.js';
-import { getConfig } from './config.js';
+import { getConfig, SUPPORTED_BANKS } from './config.js';
 import { registerTools, type ToolContext } from './tools/index.js';
 import { EnableBankingClient } from './enable-banking/client.js';
 import { EnableBankingOAuthProvider } from './auth/oauth-provider.js';
+import { SessionStore } from './enable-banking/session-store.js';
 
 const logger = createLogger();
 const config = getConfig();
+
+// Initialize session store
+const sessionStore = new SessionStore(`${config.dataDir}/sessions.db`);
 
 // Initialize Enable Banking client (if credentials available)
 let ebClient: EnableBankingClient | null = null;
@@ -39,24 +43,17 @@ if (config.enableAppId && config.enablePrivateKeyPath) {
 }
 
 // Create Express app with DNS rebinding protection
-// Derive allowed hosts from EXTERNAL_URL + localhost for dev
 const externalHostname = new URL(config.externalUrl).hostname;
-const allowedHosts = ['localhost', '127.0.0.1', 'host.docker.internal', externalHostname];
+const allowedHosts = config.host === '0.0.0.0'
+  ? undefined
+  : ['localhost', '127.0.0.1', 'host.docker.internal', externalHostname];
 const app = createMcpExpressApp({ host: config.host, allowedHosts });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-// Debug: recent OAuth events (only in non-production)
-const oauthLog: Array<{ time: string; event: string; details: string }> = [];
-function logOAuth(event: string, details: Record<string, unknown>) {
-  const entry = { time: new Date().toISOString(), event, details: JSON.stringify(details) };
-  oauthLog.push(entry);
-  if (oauthLog.length > 50) oauthLog.shift();
-  logger.info(details, `oauth.${event}`);
-}
-app.get('/debug/oauth-log', (_req, res) => {
-  res.json(oauthLog.slice(-20));
-});
+// In-memory pending connects for /connect/start -> /auth/eb-callback
+const pendingConnects = new Map<string, { bankKey: string; aspspName: string; aspspCountry: string; createdAt: number }>();
 
 // Health endpoint (unauthenticated)
 app.get('/health', async (_req, res) => {
@@ -64,24 +61,329 @@ app.get('/health', async (_req, res) => {
   let ebApiError = '';
   if (ebClient) {
     try {
-      await ebClient.listAspsps('FI');
+      await ebClient.listAspsps('PL');
       ebApiReachable = true;
     } catch (err: unknown) {
       const e = err as Error & { cause?: Error };
       ebApiError = e.cause?.message || e.message || String(err);
     }
   }
+
+  const connectedBanks = sessionStore.getAllBankConnections();
+
   res.json({
     status: 'ok',
-    bank: config.aspspName,
-    country: config.aspspCountry,
+    version: '2.1.0',
     auth: oauthProvider ? 'oauth' : 'none',
     ebConfigured: !!ebClient,
     ebApiReachable,
     ebApiError: ebApiError || undefined,
     externalUrl: config.externalUrl,
+    connected_banks: connectedBanks.map(b => ({
+      bank: b.aspsp_name,
+      key: b.bank_key,
+      accounts: b.account_uids.length,
+      valid_until: b.valid_until,
+    })),
   });
 });
+
+// ==========================================
+// Bank Connection Web Dashboard (/connect)
+// ==========================================
+
+app.get('/connect', (req, res) => {
+  const connected = sessionStore.getAllBankConnections();
+  const connectedMap = new Map(connected.map(c => [c.bank_key, c]));
+  const statusMsg = req.query.status as string | undefined;
+  const bankParam = req.query.bank as string | undefined;
+  const errorMsg = req.query.message as string | undefined;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADHD Budget Assistant - Bank Hub</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      max-width: 800px;
+      width: 100%;
+    }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1rem;
+    }
+    h1 { margin: 0 0 0.5rem 0; font-size: 1.8rem; }
+    p.sub { color: var(--muted); margin: 0; font-size: 0.95rem; }
+    .alert {
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+    .alert-success { background: rgba(16, 185, 129, 0.15); border: 1px solid var(--success); color: #34d399; }
+    .alert-error { background: rgba(239, 68, 68, 0.15); border: 1px solid var(--danger); color: #f87171; }
+    .card-list { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2.5rem; }
+    .bank-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .bank-info h3 { margin: 0 0 0.25rem 0; font-size: 1.1rem; }
+    .bank-info .meta { font-size: 0.85rem; color: var(--muted); }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .badge-active { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+    .badge-none { background: rgba(148, 163, 184, 0.2); color: var(--muted); }
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary { background: #475569; }
+    .btn-danger { background: var(--danger); }
+    .docs {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+    }
+    .docs h2 { margin-top: 0; font-size: 1.2rem; }
+    pre {
+      background: #090d16;
+      padding: 0.75rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      color: #38bdf8;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🏦 ADHD Budget — Polish Bank Hub</h1>
+      <p class="sub">Connect and manage your Polish bank accounts safely for AI assistants.</p>
+    </header>
+
+    ${statusMsg === 'connected' ? `<div class="alert alert-success">✅ Successfully connected <strong>${bankParam || 'bank'}</strong>!</div>` : ''}
+    ${statusMsg === 'disconnected' ? `<div class="alert alert-success">Disconnected <strong>${bankParam || 'bank'}</strong>.</div>` : ''}
+    ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error connecting bank: ${errorMsg || 'Authentication failed'}</div>` : ''}
+
+    <div class="card-list">
+      ${SUPPORTED_BANKS.map(bank => {
+        const conn = connectedMap.get(bank.key);
+        const isConnected = !!conn;
+        const daysLeft = conn ? Math.round((new Date(conn.valid_until).getTime() - Date.now()) / (24 * 3600 * 1000)) : 0;
+        return `
+        <div class="bank-card">
+          <div class="bank-info">
+            <h3>${bank.title}</h3>
+            <div class="meta">
+              ${isConnected 
+                ? `<span class="badge badge-active">Active (${daysLeft} days left)</span> ${conn.account_uids.length} account(s) synced` 
+                : `<span class="badge badge-none">Not Connected</span>`}
+            </div>
+          </div>
+          <div>
+            ${isConnected
+              ? `<a href="/connect/start?bank=${bank.key}" class="btn btn-secondary">Refresh</a>
+                 <a href="/connect/disconnect?bank=${bank.key}" class="btn btn-danger" onclick="return confirm('Disconnect this bank?')">Disconnect</a>`
+              : `<a href="/connect/start?bank=${bank.key}" class="btn">Connect</a>`}
+          </div>
+        </div>
+        `;
+      }).join('')}
+    </div>
+
+    <div style="margin-bottom: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem;">
+      <h3 style="margin-top: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
+        <span>⚡</span> Direct Import via Enable Banking Session ID
+      </h3>
+      <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
+        Already linked your accounts in the <a href="https://enablebanking.com/cp/" target="_blank" style="color: var(--primary); text-decoration: underline;">Enable Banking Control Panel</a>? Paste the <code>session_id</code> from your Control Panel logs (Applications &rarr; ADHD budget &rarr; Request Logs):
+      </p>
+      <form action="/connect/import-session" method="POST" style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+        <input 
+          type="text" 
+          name="session_id" 
+          placeholder="Paste session_id (e.g. 1a2b3c4d-5e6f-...)" 
+          required 
+          style="flex: 1; min-width: 280px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem; font-family: monospace;"
+        />
+        <button type="submit" class="btn" style="white-space: nowrap;">Import Session</button>
+      </form>
+    </div>
+
+    <div class="docs">
+      <h2>🤖 Connect to Your AI Clients</h2>
+      <p style="color:var(--muted);font-size:0.9rem;">Once your banks are linked above, connect any of these AI clients to access your unified finances:</p>
+      
+      <h3>1. Claude Code CLI</h3>
+      <pre><code>claude mcp add --transport http adhd-budget ${config.externalUrl}/mcp --header "Authorization: Bearer ${config.mcpToken}"</code></pre>
+
+      <h3>2. Kimi Desktop / Odysseus Web (HTTP API)</h3>
+      <p style="font-size:0.85rem;color:var(--muted);">Configure Streamable HTTP transport with Bearer token:</p>
+      <pre><code>URL: ${config.externalUrl}/mcp
+Header: Authorization: Bearer ${config.mcpToken}</code></pre>
+
+      <h3>3. Claude AI (Web)</h3>
+      <p style="font-size:0.85rem;color:var(--muted);">Add Custom Remote MCP in Claude Web Settings:</p>
+      <pre><code>${config.externalUrl}/mcp</code></pre>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+// Start bank SCA connection
+app.get('/connect/start', async (req, res) => {
+  const bankKey = req.query.bank as string;
+  if (!ebClient) {
+    res.status(500).send('Enable Banking client not initialized. Check server credentials.');
+    return;
+  }
+
+  const bankDef = SUPPORTED_BANKS.find(b => b.key === bankKey);
+  if (!bankDef) {
+    res.status(400).send(`Unknown bank: ${bankKey}. Supported: ${SUPPORTED_BANKS.map(b => b.key).join(', ')}`);
+    return;
+  }
+
+  try {
+    const ebState = `connect_${bankDef.key}_${randomUUID()}`;
+    const callbackUrl = `${config.externalUrl}/auth/eb-callback`;
+
+    pendingConnects.set(ebState, {
+      bankKey: bankDef.key,
+      aspspName: bankDef.name,
+      aspspCountry: bankDef.country,
+      createdAt: Date.now(),
+    });
+
+    const ebResponse = await ebClient.initiateAuth(
+      bankDef.name,
+      bankDef.country,
+      callbackUrl,
+      ebState,
+      'personal',
+    );
+
+    logger.info({ bank: bankDef.name, redirect: ebResponse.url }, 'connect_start_redirecting_to_bank');
+    res.redirect(ebResponse.url);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: errMsg, bank: bankKey }, 'connect_start_failed');
+    res.redirect(`/connect?status=error&message=${encodeURIComponent(errMsg)}`);
+  }
+});
+
+// Disconnect bank
+app.get('/connect/disconnect', (req, res) => {
+  const bankKey = req.query.bank as string;
+  if (bankKey) {
+    sessionStore.deleteBankConnection(bankKey);
+  }
+  res.redirect(`/connect?status=disconnected&bank=${encodeURIComponent(bankKey || '')}`);
+});
+
+function matchBankKey(aspspName: string): string {
+  const normalized = aspspName.toLowerCase();
+  for (const bank of SUPPORTED_BANKS) {
+    if (normalized.includes(bank.key.replace('_', ' ')) || 
+        normalized.includes(bank.name.toLowerCase()) || 
+        bank.name.toLowerCase().includes(normalized)) {
+      return bank.key;
+    }
+  }
+  if (normalized.includes('pko')) return 'pko_bp';
+  if (normalized.includes('nest')) return 'nest_bank';
+  if (normalized.includes('revolut')) return 'revolut';
+  return normalized.replace(/[^a-z0-9]/g, '_').slice(0, 20);
+}
+
+// Direct import of existing session ID from Enable Banking Control Panel
+app.post('/connect/import-session', async (req, res) => {
+  const sessionId = (req.body.session_id as string || '').trim();
+  if (!sessionId) {
+    res.redirect('/connect?status=error&message=Missing+session_id');
+    return;
+  }
+  if (!ebClient) {
+    res.redirect('/connect?status=error&message=Enable+Banking+credentials+not+configured');
+    return;
+  }
+
+  try {
+    const fullSession = await ebClient.getSession(sessionId);
+    const aspspName = fullSession.aspsp?.name || 'Unknown Bank';
+    const aspspCountry = fullSession.aspsp?.country || 'PL';
+    const bankKey = matchBankKey(aspspName);
+    const accounts = fullSession.accounts || [];
+    const accountUids = accounts.map(a => a.uid);
+
+    sessionStore.saveBankConnection({
+      bank_key: bankKey,
+      aspsp_name: aspspName,
+      aspsp_country: aspspCountry,
+      session_id: fullSession.session_id,
+      account_uids: accountUids,
+      accounts_data: accounts,
+      valid_until: fullSession.valid_until || new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+    });
+
+    logger.info({ bank: aspspName, sessionId, accounts: accountUids.length }, 'session_imported_successfully');
+    res.redirect(`/connect?status=connected&bank=${encodeURIComponent(aspspName)}`);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: errMsg, sessionId }, 'session_import_failed');
+    res.redirect(`/connect?status=error&message=${encodeURIComponent(`Import failed: ${errMsg}`)}`);
+  }
+});
+
 
 // Mount OAuth routes if provider is available
 if (oauthProvider) {
@@ -91,28 +393,62 @@ if (oauthProvider) {
     issuerUrl,
     baseUrl: issuerUrl,
     scopesSupported: ['banking'],
-    resourceName: `Enable Banking - ${config.aspspName}`,
+    resourceName: `ADHD Budget Gateway`,
   }));
 
-  // Enable Banking callback (NOT part of mcpAuthRouter)
+  // Enable Banking callback (handles both /connect/start and OAuth flow)
   app.get('/auth/eb-callback', async (req, res) => {
     const { code, state, error: ebError } = req.query;
-    logOAuth('eb_callback', { hasCode: !!code, hasState: !!state, ebError: ebError || undefined });
     if (ebError) {
-      res.status(400).send(`Enable Banking error: ${ebError}`);
+      res.redirect(`/connect?status=error&message=${encodeURIComponent(`Bank error: ${ebError}`)}`);
       return;
     }
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
       res.status(400).send('Missing code or state parameter');
       return;
     }
+
+    // Check if this was initiated by /connect/start
+    if (state.startsWith('connect_')) {
+      const pending = pendingConnects.get(state);
+      if (!pending) {
+        res.redirect(`/connect?status=error&message=${encodeURIComponent('Expired bank connection attempt')}`);
+        return;
+      }
+      pendingConnects.delete(state);
+
+      try {
+        const session = await ebClient!.createSession(code);
+        const fullSession = await ebClient!.getSession(session.session_id);
+        const accountUids = fullSession.accounts ? fullSession.accounts.map(a => a.uid) : [];
+
+        sessionStore.saveBankConnection({
+          bank_key: pending.bankKey,
+          aspsp_name: fullSession.aspsp?.name || pending.aspspName,
+          aspsp_country: fullSession.aspsp?.country || pending.aspspCountry,
+          session_id: session.session_id,
+          account_uids: accountUids,
+          accounts_data: fullSession.accounts || [],
+          valid_until: fullSession.valid_until || new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+        });
+
+        logger.info({ bank: pending.aspspName, accounts: accountUids.length }, 'bank_connected_successfully');
+        res.redirect(`/connect?status=connected&bank=${encodeURIComponent(pending.aspspName)}`);
+        return;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ err: errMsg }, 'bank_session_exchange_failed');
+        res.redirect(`/connect?status=error&message=${encodeURIComponent(errMsg)}`);
+        return;
+      }
+    }
+
+    // Otherwise, handle as Claude OAuth handshake
     const result = await oauthProvider!.handleEbCallback(code, state);
     if ('error' in result) {
-      logOAuth('eb_callback_error', { error: result.error });
       res.status(400).send(result.error);
       return;
     }
-    logOAuth('eb_callback_success', { redirect: result.redirectUrl.substring(0, 100) });
     res.redirect(result.redirectUrl);
   });
 }
@@ -125,23 +461,40 @@ function createServerForSession(authInfo?: AuthInfo): McpServer {
     getClient: () => ebClient,
     getAccountUids: () => (authInfo?.extra?.accountUids as string[]) ?? [],
     getSessionId: () => (authInfo?.extra?.ebSessionId as string) ?? null,
+    getSessionStore: () => sessionStore,
   };
 
   const server = new McpServer(
-    { name: `enable-banking-${config.aspspName.toLowerCase()}`, version: '2.0.0' },
+    { name: 'adhd-budget-gateway', version: '2.1.0' },
     { capabilities: { tools: {} } },
   );
   registerTools(server, ctx);
   return server;
 }
 
-// Bearer auth middleware (optional — only if OAuth provider is configured)
-const authMiddleware = oauthProvider
+// Dual Auth Middleware (Bearer token for CLI/Desktop/API + OAuth for Claude Web)
+const rawOAuthMiddleware = oauthProvider
   ? requireBearerAuth({
       verifier: oauthProvider,
       resourceMetadataUrl: `${config.externalUrl}/.well-known/oauth-protected-resource`,
     })
   : (_req: express.Request, _res: express.Response, next: express.NextFunction) => next();
+
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  if (config.mcpToken && authHeader === `Bearer ${config.mcpToken}`) {
+    // Authenticated via static Bearer token (Claude Code, Kimi, Odysseus API mode)
+    (req as express.Request & { auth: AuthInfo }).auth = {
+      token: config.mcpToken,
+      clientId: 'bearer-client',
+      scopes: ['banking'],
+      extra: { staticAuth: true },
+    };
+    return next();
+  }
+
+  return rawOAuthMiddleware(req, res, next);
+};
 
 // POST /mcp
 app.post('/mcp', authMiddleware, async (req, res) => {
@@ -198,5 +551,5 @@ app.delete('/mcp', authMiddleware, async (req, res) => {
 
 const port = config.port;
 app.listen(port, config.host, () => {
-  logger.info({ port, host: config.host, bank: config.aspspName, country: config.aspspCountry, auth: oauthProvider ? 'oauth' : 'none' }, 'MCP server started');
+  logger.info({ port, host: config.host, auth: oauthProvider ? 'dual (oauth + bearer)' : 'none' }, 'ADHD Budget Gateway started');
 });

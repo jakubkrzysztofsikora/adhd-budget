@@ -28,15 +28,22 @@ describe('MCP Tools', () => {
     await server.close();
   });
 
-  it('lists all 5 registered tools', async () => {
+  it('lists all 10 registered tools including ADHD financial tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map(t => t.name);
+    // High-value ADHD tools
+    expect(names).toContain('get_financial_snapshot');
+    expect(names).toContain('get_spending_analysis');
+    expect(names).toContain('query_transactions');
+    expect(names).toContain('get_recurring_bills');
+    expect(names).toContain('get_cashflow_forecast');
+    // Raw banking tools
     expect(names).toContain('accounts');
     expect(names).toContain('balances');
     expect(names).toContain('transactions');
     expect(names).toContain('transaction');
     expect(names).toContain('search');
-    expect(tools).toHaveLength(5);
+    expect(tools).toHaveLength(10);
   });
 
   it('accounts tool returns valid content', async () => {

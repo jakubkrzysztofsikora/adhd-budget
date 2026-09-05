@@ -1,0 +1,350 @@
+export interface CleanTransaction {
+  id: string;
+  bank: string;
+  account_id: string;
+  date: string;
+  amount: number;
+  currency: string;
+  merchant: string;
+  category: string;
+  raw_description: string;
+  is_internal_transfer: boolean;
+  is_income: boolean;
+  is_outlier?: boolean;
+  outlier_reason?: string;
+}
+
+export interface SpendingAnalysis {
+  period: string;
+  date_from: string;
+  date_to: string;
+  total_spent_pln: number;
+  total_income_pln: number;
+  daily_burn_rate_pln: number;
+  transaction_count: number;
+  top_merchants: Array<{ merchant: string; category: string; amount: number; count: number }>;
+  categories_breakdown: Record<string, number>;
+  outliers: CleanTransaction[];
+  internal_transfers_excluded: Array<{ merchant: string; amount: number; date: string }>;
+}
+
+export interface SubscriptionItem {
+  merchant: string;
+  category: string;
+  monthly_amount: number;
+  occurrences: number;
+  last_date: string;
+  frequency: 'monthly' | 'weekly' | 'irregular';
+}
+
+export interface CashflowForecast {
+  current_liquid_balance_pln: number;
+  days_in_month: number;
+  day_of_month: number;
+  days_remaining: number;
+  spent_so_far_pln: number;
+  current_daily_burn_rate_pln: number;
+  estimated_upcoming_recurring_pln: number;
+  projected_month_end_balance_pln: number;
+  safe_daily_spend_limit_pln: number;
+  status: 'on_track' | 'warning' | 'deficit_risk';
+  advice: string;
+}
+
+// Known Polish merchant patterns (regex -> clean name + category)
+const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }> = [
+  // Groceries
+  { regex: /biedronka/i, name: 'Biedronka', category: 'Groceries' },
+  { regex: /żabka|zabka/i, name: 'Żabka', category: 'Groceries' },
+  { regex: /dino\s+(polska|nr)?/i, name: 'Dino', category: 'Groceries' },
+  { regex: /lidl/i, name: 'Lidl', category: 'Groceries' },
+  { regex: /kaufland/i, name: 'Kaufland', category: 'Groceries' },
+  { regex: /auchan/i, name: 'Auchan', category: 'Groceries' },
+  { regex: /carrefour/i, name: 'Carrefour', category: 'Groceries' },
+  { regex: /stokrotka/i, name: 'Stokrotka', category: 'Groceries' },
+  { regex: /netto/i, name: 'Netto', category: 'Groceries' },
+  { regex: /frisco/i, name: 'Frisco', category: 'Groceries' },
+
+  // Fuel & Transport
+  { regex: /orlen/i, name: 'Orlen', category: 'Transport & Fuel' },
+  { regex: /bp\s+|stacja\s+bp/i, name: 'BP', category: 'Transport & Fuel' },
+  { regex: /shell/i, name: 'Shell', category: 'Transport & Fuel' },
+  { regex: /circle\s*k/i, name: 'Circle K', category: 'Transport & Fuel' },
+  { regex: /mol\s+polska/i, name: 'MOL', category: 'Transport & Fuel' },
+  { regex: /uber/i, name: 'Uber', category: 'Transport & Fuel' },
+  { regex: /bolt/i, name: 'Bolt', category: 'Transport & Fuel' },
+  { regex: /freenow/i, name: 'FreeNow', category: 'Transport & Fuel' },
+  { regex: /jakdojade/i, name: 'Jakdojade', category: 'Transport & Fuel' },
+  { regex: /ztm|mpk|koleje|pkp\s+intercity/i, name: 'Public Transit', category: 'Transport & Fuel' },
+  { regex: /autodirect|autopay/i, name: 'Autopay', category: 'Transport & Fuel' },
+
+  // E-commerce & Shopping
+  { regex: /allegro/i, name: 'Allegro', category: 'Shopping' },
+  { regex: /amazon/i, name: 'Amazon', category: 'Shopping' },
+  { regex: /inpost|paczkomat/i, name: 'InPost', category: 'Shopping' },
+  { regex: /aliexpress/i, name: 'AliExpress', category: 'Shopping' },
+  { regex: /zalando/i, name: 'Zalando', category: 'Shopping' },
+  { regex: /empik/i, name: 'Empik', category: 'Shopping' },
+  { regex: /ikea/i, name: 'IKEA', category: 'Shopping' },
+  { regex: /leroy\s+merlin|castorama|obi/i, name: 'Home Improvement', category: 'Shopping' },
+  { regex: /media\s*markt|rtv\s*euro\s*agd|x-kom|morele/i, name: 'Electronics', category: 'Shopping' },
+  { regex: /rossmann/i, name: 'Rossmann', category: 'Health & Beauty' },
+  { regex: /hebe/i, name: 'Hebe', category: 'Health & Beauty' },
+  { regex: /apteka|doz\.pl|gemini/i, name: 'Pharmacy', category: 'Health & Beauty' },
+
+  // Dining & Food Delivery
+  { regex: /pyszne\.pl|pyszne/i, name: 'Pyszne.pl', category: 'Dining' },
+  { regex: /glovo/i, name: 'Glovo', category: 'Dining' },
+  { regex: /wolt/i, name: 'Wolt', category: 'Dining' },
+  { regex: /uber\s*eats/i, name: 'Uber Eats', category: 'Dining' },
+  { regex: /mcdonald/i, name: "McDonald's", category: 'Dining' },
+  { regex: /kfc/i, name: 'KFC', category: 'Dining' },
+  { regex: /starbucks|costa\s+coffee/i, name: 'Coffee', category: 'Dining' },
+
+  // Subscriptions & Tech
+  { regex: /netflix/i, name: 'Netflix', category: 'Subscriptions' },
+  { regex: /spotify/i, name: 'Spotify', category: 'Subscriptions' },
+  { regex: /youtube|google\s*\*\s*youtube/i, name: 'YouTube Premium', category: 'Subscriptions' },
+  { regex: /apple\.com|itunes/i, name: 'Apple Services', category: 'Subscriptions' },
+  { regex: /google\s*\*\s*(storage|cloud|play)/i, name: 'Google Services', category: 'Subscriptions' },
+  { regex: /disney\s*(\+|plus)/i, name: 'Disney+', category: 'Subscriptions' },
+  { regex: /hbo|max\.com/i, name: 'HBO Max', category: 'Subscriptions' },
+  { regex: /steamgames|valve/i, name: 'Steam', category: 'Entertainment' },
+  { regex: /playstation|sony/i, name: 'PlayStation', category: 'Entertainment' },
+  { regex: /chatgpt|openai/i, name: 'OpenAI', category: 'Subscriptions' },
+  { regex: /anthropic|claude/i, name: 'Anthropic', category: 'Subscriptions' },
+  { regex: /gym|fitness|calypso|zdrofit|mcfit/i, name: 'Gym / Fitness', category: 'Subscriptions' },
+
+  // Telecom & Utilities
+  { regex: /orange\s+polska/i, name: 'Orange', category: 'Utilities' },
+  { regex: /play|p4\s+sp/i, name: 'Play', category: 'Utilities' },
+  { regex: /plus\s+gsm|polkomtel/i, name: 'Plus', category: 'Utilities' },
+  { regex: /t-mobile/i, name: 'T-Mobile', category: 'Utilities' },
+  { regex: /upc|vectra|inea/i, name: 'Internet / Cable', category: 'Utilities' },
+  { regex: /pge|tauron|enea|energa/i, name: 'Electricity', category: 'Utilities' },
+  { regex: /pgnig/i, name: 'Gas', category: 'Utilities' },
+  { regex: /spółdzielnia|wspólnota|czynsz/i, name: 'Rent / Housing', category: 'Utilities' },
+];
+
+export function cleanMerchantAndCategory(description: string, creditorName?: string): { merchant: string; category: string } {
+  const combined = `${creditorName || ''} ${description || ''}`.trim();
+
+  for (const pattern of MERCHANT_PATTERNS) {
+    if (pattern.regex.test(combined)) {
+      return { merchant: pattern.name, category: pattern.category };
+    }
+  }
+
+  // Fallback: clean up noisy bank prefixes
+  let cleaned = (creditorName || description || 'Unknown')
+    .replace(/^PŁATNOŚĆ KARTĄ\s+\d+\s+\d{2}\.\d{2}\.\d{4}\s+/i, '')
+    .replace(/^ZAKUP PRZY UŻYCIU KODU BLIK\s+\d+\s+/i, '')
+    .replace(/^PRZELEW KRAJOWY ELIXIR\s+/i, '')
+    .replace(/^PRZELEW ŚRODKÓW\s+/i, '')
+    .replace(/^TRANSAKCJA KARTĄ\s+/i, '')
+    .replace(/\s+PL\s*$/i, '')
+    .trim();
+
+  if (cleaned.length > 35) {
+    cleaned = cleaned.substring(0, 32) + '...';
+  }
+
+  return { merchant: cleaned || 'Uncategorized', category: 'Other' };
+}
+
+export function isInternalTransfer(description: string, creditorName?: string): boolean {
+  const combined = `${creditorName || ''} ${description || ''}`.toLowerCase();
+  
+  const internalKeywords = [
+    'przelew własny',
+    'przelew na rachunek własny',
+    'przelew miedzy rachunkami',
+    'przelew między rachunkami',
+    'zasilenie revolut',
+    'revolut top up',
+    'revolut top-up',
+    'top-up revolut',
+    'spłata karty',
+    'splata karty',
+    'lokata',
+    'przelew na konto oszczędnościowe',
+    'przelew z konta oszczędnościowego',
+  ];
+
+  return internalKeywords.some(k => combined.includes(k));
+}
+
+export function analyzeSpending(transactions: CleanTransaction[], period: string, daysInPeriod: number): SpendingAnalysis {
+  let totalSpent = 0;
+  let totalIncome = 0;
+  const merchantMap = new Map<string, { category: string; amount: number; count: number }>();
+  const categoryMap: Record<string, number> = {};
+  const internalTransfers: Array<{ merchant: string; amount: number; date: string }> = [];
+  const spentTransactions: CleanTransaction[] = [];
+
+  for (const tx of transactions) {
+    if (tx.is_internal_transfer) {
+      internalTransfers.push({ merchant: tx.merchant, amount: Math.abs(tx.amount), date: tx.date });
+      continue;
+    }
+
+    if (tx.is_income || tx.amount > 0) {
+      totalIncome += tx.amount;
+      continue;
+    }
+
+    const absAmount = Math.abs(tx.amount);
+    totalSpent += absAmount;
+    spentTransactions.push({ ...tx, amount: absAmount });
+
+    const existing = merchantMap.get(tx.merchant) || { category: tx.category, amount: 0, count: 0 };
+    existing.amount += absAmount;
+    existing.count += 1;
+    merchantMap.set(tx.merchant, existing);
+
+    categoryMap[tx.category] = (categoryMap[tx.category] || 0) + absAmount;
+  }
+
+  const topMerchants = Array.from(merchantMap.entries())
+    .map(([merchant, data]) => ({ merchant, ...data, amount: Math.round(data.amount * 100) / 100 }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 10);
+
+  const amounts = spentTransactions.map(t => t.amount);
+  const mean = amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) / amounts.length : 0;
+  const variance = amounts.length > 1 ? amounts.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (amounts.length - 1) : 0;
+  const stdDev = Math.sqrt(variance);
+
+  // Outlier detection: z-score or > 2.5x mean or > 3x median for significant expenses
+  const sortedAmounts = [...amounts].sort((a, b) => a - b);
+  const median = sortedAmounts.length > 0 ? sortedAmounts[Math.floor(sortedAmounts.length / 2)] : 0;
+  const amountsExcludingMax = sortedAmounts.slice(0, -1);
+  const baselineMean = amountsExcludingMax.length > 0 ? amountsExcludingMax.reduce((a, b) => a + b, 0) / amountsExcludingMax.length : mean;
+
+  const outliers: CleanTransaction[] = [];
+  for (const tx of spentTransactions) {
+    const isOutlier =
+      (stdDev > 0 && tx.amount > mean + 1.5 * stdDev) ||
+      (baselineMean > 0 && tx.amount > 3 * baselineMean && tx.amount >= 200) ||
+      (median > 0 && tx.amount > 3 * median && tx.amount >= 200);
+
+    if (isOutlier) {
+      const times = baselineMean > 0 ? (tx.amount / baselineMean).toFixed(1) : '2+';
+      outliers.push({
+        ...tx,
+        is_outlier: true,
+        outlier_reason: `${times}x above typical transaction size (${(baselineMean || median).toFixed(0)} PLN)`,
+      });
+    }
+  }
+
+  for (const cat in categoryMap) {
+    categoryMap[cat] = Math.round(categoryMap[cat] * 100) / 100;
+  }
+
+  const safeDays = Math.max(daysInPeriod, 1);
+  const dailyBurn = Math.round((totalSpent / safeDays) * 100) / 100;
+
+  const dates = transactions.map(t => t.date).filter(Boolean).sort();
+  const dateFrom = dates[0] || new Date().toISOString().slice(0, 10);
+  const dateTo = dates[dates.length - 1] || new Date().toISOString().slice(0, 10);
+
+  return {
+    period,
+    date_from: dateFrom,
+    date_to: dateTo,
+    total_spent_pln: Math.round(totalSpent * 100) / 100,
+    total_income_pln: Math.round(totalIncome * 100) / 100,
+    daily_burn_rate_pln: dailyBurn,
+    transaction_count: spentTransactions.length,
+    top_merchants: topMerchants,
+    categories_breakdown: categoryMap,
+    outliers,
+    internal_transfers_excluded: internalTransfers,
+  };
+}
+
+export function detectSubscriptions(transactions: CleanTransaction[]): SubscriptionItem[] {
+  const byMerchant = new Map<string, Array<{ amount: number; date: string; category: string }>>();
+
+  for (const tx of transactions) {
+    if (tx.is_internal_transfer || tx.is_income || tx.amount >= 0) continue;
+    const abs = Math.abs(tx.amount);
+    const list = byMerchant.get(tx.merchant) || [];
+    list.push({ amount: abs, date: tx.date, category: tx.category });
+    byMerchant.set(tx.merchant, list);
+  }
+
+  const subscriptions: SubscriptionItem[] = [];
+
+  for (const [merchant, history] of byMerchant.entries()) {
+    const isKnownSub = history.some(h => h.category === 'Subscriptions' || h.category === 'Utilities');
+
+    if (history.length >= 2 || isKnownSub) {
+      history.sort((a, b) => b.date.localeCompare(a.date));
+      const latest = history[0];
+      const avgAmount = history.reduce((sum, h) => sum + h.amount, 0) / history.length;
+      const isConsistent = history.every(h => Math.abs(h.amount - avgAmount) / avgAmount < 0.25);
+
+      if (isConsistent || isKnownSub) {
+        subscriptions.push({
+          merchant,
+          category: latest.category,
+          monthly_amount: Math.round(latest.amount * 100) / 100,
+          occurrences: history.length,
+          last_date: latest.date,
+          frequency: 'monthly',
+        });
+      }
+    }
+  }
+
+  return subscriptions.sort((a, b) => b.monthly_amount - a.monthly_amount);
+}
+
+export function calculateCashflowForecast(
+  liquidBalancePln: number,
+  spentSoFarPln: number,
+  recurringSubscriptions: SubscriptionItem[],
+  dayOfMonth: number = new Date().getDate(),
+  daysInMonth: number = 30,
+): CashflowForecast {
+  const daysRemaining = Math.max(daysInMonth - dayOfMonth, 1);
+  const dailyBurn = dayOfMonth > 0 ? spentSoFarPln / dayOfMonth : 0;
+
+  const monthlyFixedTotal = recurringSubscriptions.reduce((acc, sub) => acc + sub.monthly_amount, 0);
+  const estimatedUpcomingBills = Math.max(monthlyFixedTotal * (daysRemaining / daysInMonth), 0);
+
+  const projectedSpendRemaining = (dailyBurn * daysRemaining) + estimatedUpcomingBills;
+  const projectedMonthEndBalance = liquidBalancePln - projectedSpendRemaining;
+
+  const safeDailySpend = Math.max((liquidBalancePln - estimatedUpcomingBills) / daysRemaining, 0);
+
+  let status: 'on_track' | 'warning' | 'deficit_risk' = 'on_track';
+  let advice = '';
+
+  if (projectedMonthEndBalance < 0) {
+    status = 'deficit_risk';
+    advice = `Warning: At your current pace of ${dailyBurn.toFixed(0)} PLN/day, you will exceed your balance before month end. Limit discretionary spending to ${safeDailySpend.toFixed(0)} PLN/day.`;
+  } else if (projectedMonthEndBalance < liquidBalancePln * 0.15) {
+    status = 'warning';
+    advice = `Caution: Balance will be tight (${projectedMonthEndBalance.toFixed(0)} PLN left at month end). Target daily spend: ${safeDailySpend.toFixed(0)} PLN/day.`;
+  } else {
+    status = 'on_track';
+    advice = `Looking healthy: Projected month-end balance is ${projectedMonthEndBalance.toFixed(0)} PLN. Safe daily spending limit: ${safeDailySpend.toFixed(0)} PLN/day.`;
+  }
+
+  return {
+    current_liquid_balance_pln: Math.round(liquidBalancePln * 100) / 100,
+    days_in_month: daysInMonth,
+    day_of_month: dayOfMonth,
+    days_remaining: daysRemaining,
+    spent_so_far_pln: Math.round(spentSoFarPln * 100) / 100,
+    current_daily_burn_rate_pln: Math.round(dailyBurn * 100) / 100,
+    estimated_upcoming_recurring_pln: Math.round(estimatedUpcomingBills * 100) / 100,
+    projected_month_end_balance_pln: Math.round(projectedMonthEndBalance * 100) / 100,
+    safe_daily_spend_limit_pln: Math.round(safeDailySpend * 100) / 100,
+    status,
+    advice,
+  };
+}

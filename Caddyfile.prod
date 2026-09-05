@@ -61,8 +61,15 @@
         }
     }
 
-    # Enable Banking callback
+    # Enable Banking callback and connect dashboard
     handle /auth/* {
+        reverse_proxy mcp-server:8081 {
+            header_up X-Forwarded-Proto https
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    handle /connect* {
         reverse_proxy mcp-server:8081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}

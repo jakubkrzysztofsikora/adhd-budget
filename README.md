@@ -1,168 +1,110 @@
-# [WiP] ADHD Budget Assistant
+# ADHD Budget Assistant — Polish Bank Gateway
 
-An automated financial tracking system designed for ADHD households - zero manual reconciliation required.
+An automated, zero-reconciliation financial intelligence gateway designed for ADHD households. Connects safely to Polish bank accounts (**PKO Bank Polski**, **Nest Bank**, **Revolut**) and exposes high-value financial tools to your AI assistants (**Claude AI**, **Claude Code**, **Kimi Desktop**, **Odysseus Web**) via the Model Context Protocol (MCP).
 
-**Live Instance:** https://adhdbudget.bieda.it
+**Live Instance:** https://adhdbudget.bieda.it  
+**Bank Connection Hub:** https://adhdbudget.bieda.it/connect
 
-## Overview
+---
 
-The ADHD Budget Assistant automatically:
-- Collects transactions from Enable Banking API with OAuth 2.0
-- Categorizes spending using ML
-- Sends daily WhatsApp summaries
-- Provides financial projections
-- Integrates with AI agents via MCP (Model Context Protocol)
+## Key Features (Pareto 80/20 Architecture)
 
-## Quick Start
+1. **Unified Multi-Bank Hub:** One single gateway connects to PKO BP, Nest Bank, and Revolut simultaneously. No fragmented multi-container setups.
+2. **Safe & Decoupled Bank Auth:** Connect your banks once every 90–180 days via a clean web UI at `/connect`. Read-only PSD2 AIS (Account Information Services) only — no payment initiation capabilities.
+3. **Dual AI Authentication:**
+   - **OAuth 2.1 (PKCE & DCR):** For remote web clients like **Claude AI (Web)** and **Odysseus Web**.
+   - **Static Bearer Token:** For local CLI and desktop clients like **Claude Code**, **Kimi Desktop**, and **Odysseus Web**.
+4. **5 High-Value ADHD Analysis Tools:**
+   - `get_financial_snapshot` — Unified liquid balances across all banks in PLN/EUR + total net worth and consent health.
+   - `get_spending_analysis` — Spending velocity, top Polish merchants (Biedronka, Żabka, Orlen, Allegro), outlier impulse buys (>2 std dev), and internal transfer deduplication (e.g. PKO → Revolut topups are excluded from spending).
+   - `query_transactions` — Multi-bank search by merchant, date, amount range, and category.
+   - `get_recurring_bills` — Detection of fixed bills and subscriptions (Netflix, Spotify, Gym, czynsz, telecom).
+   - `get_cashflow_forecast` — ADHD "Safe-to-Spend" daily allowance and projected month-end balance based on current burn rate.
 
-### Local Development
+---
+
+## Quick Setup Guide
+
+### 1. Connect Your Banks
+
+1. Visit your deployed instance at `https://adhdbudget.bieda.it/connect` (or `http://localhost:8081/connect` locally).
+2. Click **Connect** next to:
+   - **PKO Bank Polski**
+   - **Nest Bank**
+   - **Revolut**
+3. Complete the bank's strong customer authentication (SCA).
+4. The dashboard will show your connected accounts, balances, and remaining days of consent.
+
+---
+
+## Connecting Your AI Clients
+
+### 1. Claude Code (CLI)
+
+Add the MCP gateway using Claude Code's CLI with your Bearer token:
 
 ```bash
-# Clone repository
+claude mcp add --transport http adhd-budget https://adhdbudget.bieda.it/mcp --header "Authorization: Bearer <YOUR_MCP_TOKEN>"
+```
+
+*(For local development: use `http://localhost:8081/mcp`)*
+
+### 2. Kimi Desktop
+
+In Kimi Desktop Settings → Model Context Protocol / Tools:
+
+- **Transport:** HTTP / Streamable HTTP (or SSE)
+- **URL:** `https://adhdbudget.bieda.it/mcp`
+- **Headers:**
+  ```
+  Authorization: Bearer <YOUR_MCP_TOKEN>
+  ```
+
+### 3. Odysseus Web
+
+Configure Odysseus with the streamable HTTP endpoint:
+
+- **Endpoint URL:** `https://adhdbudget.bieda.it/mcp`
+- **Authentication:** `Bearer <YOUR_MCP_TOKEN>` (or OAuth 2.1 authorization code flow)
+
+### 4. Claude AI (Web)
+
+1. Open Claude.ai → Account Settings → Connectors / Integrations → Add Custom Connector.
+2. Enter the remote MCP endpoint URL:
+   ```
+   https://adhdbudget.bieda.it/mcp
+   ```
+3. Claude will discover the OAuth endpoints, perform Dynamic Client Registration, and complete the authorization code handshake.
+
+---
+
+## Local Development & Running
+
+```bash
+# Clone & navigate
 git clone https://github.com/jakubkrzysztofsikora/adhd-budget.git
 cd adhd-budget
 
-# Copy environment variables
+# Configure environment (.env)
 cp .env.example .env
-# Edit .env with your credentials
+# Fill in ENABLE_APP_ID, keys/enablebanking_private.pem, and MCP_TOKEN
 
-# Start services
+# Start with Docker Compose
 docker compose up -d
 
-# Verify all services are running
-docker compose ps
-
-# Run tests
-./tests/shell/scan_git_secrets.sh  # S1: Secrets audit
-./tests/shell/check_compose_security.sh  # S4: Container security
+# Or run directly with Node.js
+cd mcp-server
+npm install
+npm run build
+npm start
 ```
 
-### Access Points
-
-- **Main App:** http://localhost
-- **API:** http://localhost:8082
-- **MCP Server:** http://localhost:8081/mcp (streamable HTTP)
-- **OAuth Flow:** http://localhost/oauth/authorize
-- **MCP Inspector:** http://localhost:6274 (development)
-- **Log Viewer:** http://localhost:8888 (MCP server logs with mTLS)
-- **Health Check:** http://localhost/health
-
-## MCP Remote Server
-
-The MCP server implements the 2025-06-18 protocol with streamable HTTP
-transport. It validates the ``MCP-Protocol-Version`` header, enforces
-origin allow lists and requires OAuth 2.1 bearer tokens for protected tools.
-
-### Run locally
+### Run Tests
 
 ```bash
-python src/mcp_remote_server.py
-# Server listens on http://127.0.0.1:8081/mcp
+cd mcp-server
+npm test
 ```
-
-Set ``MCP_PORT`` and ``MCP_HOST`` to override the bind address. For example,
-Docker Compose sets ``MCP_PORT=8081`` and ``MCP_HOST=0.0.0.0`` so that other
-containers and the reverse proxy can reach the service. The default port is
-8081 for consistency with the Docker environment.
-
-### Test the handshake
-
-```bash
-curl -X POST http://127.0.0.1:8081/mcp \
-  -H "Content-Type: application/json" \
-  -H "MCP-Protocol-Version: 2025-06-18" \
-  -d '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cli","version":"0.1.0"}}}'
-```
-
-Use the ``Mcp-Session-Id`` response header for subsequent POST requests and
-the SSE stream:
-
-```bash
-curl -N http://127.0.0.1:8081/mcp \
-  -H "Accept: text/event-stream" \
-  -H "Mcp-Session-Id: <session-id>" \
-  -H "MCP-Protocol-Version: 2025-06-18"
-```
-
-### OAuth endpoints
-
-The server exposes OAuth 2.1 discovery and token endpoints required for
-remote deployments:
-
-- ``/.well-known/oauth-authorization-server`` – metadata
-- ``/.well-known/oauth-protected-resource`` – RFC 8707 resource indicators
-- ``/.well-known/mcp.json`` – Remote MCP manifest (ChatGPT Developer Mode & Claude Web)
-- ``/oauth/register`` – Dynamic Client Registration (POST JSON)
-- ``/oauth/authorize`` – Issues authorization codes and redirects
-- ``/oauth/token`` – Exchanges authorization codes or refresh tokens
-- ``/oauth/revoke`` – Revokes access or refresh tokens
-
-The server automatically seeds Claude and ChatGPT redirect URIs (see
-``DEFAULT_REMOTE_REDIRECT_URIS``) and mirrors any ``X-Forwarded-Proto`` /
-``X-Forwarded-Host`` headers so manifests and OAuth metadata point at the
-public hostname behind your reverse proxy. Deployments can override the
-issuer explicitly with ``OAUTH_ISSUER`` if required.
-
-### Remote connector setup
-
-Remote MCP clients discover the server through the ``/.well-known/mcp.json``
-manifest. The manifest advertises the streamable HTTP endpoint, supported
-protocol versions and OAuth 2.1 configuration so that connectors such as
-ChatGPT Developer Mode and Claude Web/Desktop can configure themselves
-automatically.
-
-#### Enable Banking consent
-
-The OAuth handshake now performs the Enable Banking consent automatically. When
-a connector (Claude, ChatGPT, MCP Inspector, etc.) sends the user through
-``/oauth/authorize`` the server immediately redirects them to Enable Banking to
-pick their bank and grant access. Once consent succeeds the server exchanges the
-code, stores the resulting access/refresh tokens inside the OAuth grant and only
-then redirects back to the connector's callback URL.
-
-As a result there are no dedicated ``enable.banking.*`` tools. When a connector
-has a valid OAuth token it already has a bank session wired up and all financial
-tools (``summary.today``, ``projection.month``, ``search``, ``fetch`` and
-``transactions.query``) can operate on live data. If the user revokes consent or
-bank access expires, have them disconnect/reconnect the connector so the OAuth
-flow can re-run the Enable Banking sign-in screen.
-
-**ChatGPT Developer Mode**
-
-1. Deploy the server behind HTTPS (e.g. ``https://mcp.example.com``).
-2. Ensure the domain is reachable from ChatGPT and that the manifest is
-   accessible at ``https://mcp.example.com/.well-known/mcp.json``.
-3. In ChatGPT → Settings → Connectors → Advanced → Developer Mode, add the
-   base URL (``https://mcp.example.com``). ChatGPT performs discovery and
-   dynamic registration automatically.
-4. The OAuth server now issues HTTP 302 redirects directly to the ChatGPT
-   callback and recognises the entire ``https://chat.openai.com/`` redirect
-   family (``DEFAULT_REMOTE_REDIRECT_URIS``) even in production builds.
-
-**Claude Web & Desktop**
-
-1. Visit Claude → Settings → Remote Desktops → Add new.
-2. Enter your HTTPS endpoint (e.g. ``https://mcp.example.com``). Claude fetches
-   ``/.well-known/mcp.json`` (respecting forwarded headers) and registers a
-   client automatically.
-3. Complete the OAuth flow—the server now returns a 302 redirect straight back
-   to Claude's callback URL and accepts the ``https://claude.ai/`` and
-   ``https://app.claude.ai/`` variants out of the box.
-4. Claude Desktop can still connect locally via ``npx mcp-remote`` during
-   development if you prefer not to expose the service publicly.
-
-### Verifying with MCP Inspector
-
-Run the official Inspector container against your deployment:
-
-```bash
-docker run --rm -it \
-  -e MCP_SERVER_URL="https://mcp.example.com/mcp" \
-  ghcr.io/modelcontextprotocol/inspector:latest
-```
-
-The inspector follows the same manifest + OAuth flow and should list the
-available tools once authentication succeeds.
 
 ## Deployment Pipeline
 
@@ -217,102 +159,40 @@ Configure these in Settings > Secrets and variables > Actions:
 
 ## Testing Protocol
 
-### Pre-Deployment (Local)
-
 ```bash
-# 1. Security checks
-./tests/shell/scan_git_secrets.sh
-./tests/shell/check_compose_security.sh
-
-# 2. Run unit tests
-python -m pytest tests/unit/ -v
-
-# 3. Integration tests (requires Docker)
-docker compose up -d
-python -m pytest tests/integration/ -v
+cd mcp-server
+npm test
 ```
-
-### Post-Deployment (Production)
-
-```bash
-# 1. Run E2E tests against production
-python3 tests/e2e/test_deployed_instance.py
-
-# 2. Test with MCP Inspector or Claude Desktop
-./setup_mcp_inspector.sh
-# Configure Inspector or Claude Desktop with the streamable HTTP transport:
-#   http://127.0.0.1:8081/mcp
-# Add the OAuth client via /oauth/register and complete the authorization code flow.
-
-# 3. Verify authenticated endpoints
-curl -H "Authorization: Bearer YOUR_API_TOKEN" https://adhdbudget.bieda.it/api/health
-```
-
-### Test Results
-
-All gates must pass before deployment:
-
-| Gate | Description | Status |
-|------|-------------|--------|
-| S1 | Secrets hygiene | ✅ |
-| S4 | Container security | ✅ |
-| T1/T4 | Compose & MCP | ✅ |
-| T2/T5 | Data flow | ✅ |
-| T3 | Unit tests | ✅ |
-
-## Log Viewer
-
-The log-viewer service provides HTTP access to MCP server logs with mTLS authentication.
-
-### Quick Access (Development)
-```bash
-# View logs (no certificates required in dev mode)
-curl http://localhost:8888/logs/stream
-
-# Health check
-curl http://localhost:8888/health
-```
-
-### Production Access (with mTLS)
-```bash
-# Generate certificates
-bash scripts/generate-log-viewer-certs.sh
-
-# Access with mTLS
-curl https://localhost:8888/logs/stream \
-  --cacert certs/ca.crt \
-  --cert certs/client.crt \
-  --key certs/client.key
-```
-
-See [LOG_VIEWER_QUICKSTART.md](LOG_VIEWER_QUICKSTART.md) for complete documentation.
 
 ## Architecture
 
 ```
-┌─────────────────┐
-│  Reverse Proxy  │ (Caddy with HTTPS)
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    │   API   │ (Python FastAPI)
-    └────┬────┘
-         │
-┌────────┴────────┐
-│   MCP Server    │ (JSON-RPC over SSE)
-└────────┬────────┘
-         │
-┌────────┴────────┐
-│    Database     │ (PostgreSQL)
-└─────────────────┘
-         │
-┌────────┴────────┐
-│     Worker      │ (Python - Enable Banking sync)
-└─────────────────┘
-         │
-┌────────┴────────┐
-│     Redis       │ (Cache & queues)
-└─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  AI Clients (Claude AI, Claude Code, Kimi, Odysseus)        │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │ OAuth 2.1 (Claude Web)       │ Bearer Token (CLI/Desktop/API)
+               ▼                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Reverse Proxy (Caddy with HTTPS)                           │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ADHD Budget Gateway (Node.js 22 / TypeScript)              │
+│                                                             │
+│  • /connect Dashboard (Link PKO BP, Nest Bank, Revolut)     │
+│  • Polish Pre-Aggregation (BLIK, Elixir, Deduplication)     │
+│  • High-Value ADHD Tools (Snapshot, Leaks, Outliers, Bills) │
+│  • SQLite Storage (WAL Mode, Zero external DBs)             │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ PSD2 AIS (JWT RS256)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Enable Banking API (Restricted Production Tier)            │
+│       ├──► PKO Bank Polski                                  │
+│       ├──► Nest Bank                                        │
+│       └──► Revolut                                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Security

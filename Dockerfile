@@ -1,39 +1,24 @@
-# Main application Dockerfile
-FROM python:3.11-alpine@sha256:8d8c6d3808243160605925c2a7ab2dc5c72d0e75651699b0639143613e0855b8
-
-# Install system dependencies
-RUN apk add --no-cache \
-    postgresql-client \
-    gcc \
-    musl-dev \
-    postgresql-dev
-
-# Install Python dependencies
-RUN pip install --no-cache-dir \
-    requests \
-    psycopg2-binary \
-    pyjwt \
-    cryptography \
-    aiohttp \
-    freezegun
-
-# Create non-root user
-RUN adduser -D -u 1000 appuser
+FROM node:22-alpine AS builder
 
 WORKDIR /app
+COPY mcp-server/package*.json ./
+RUN npm ci
+COPY mcp-server/tsconfig.json ./
+COPY mcp-server/src/ src/
+RUN npm run build
 
-# Copy application code with proper ownership
-COPY --chown=1000:1000 src/ /app/src/
+FROM node:22-alpine
 
-# Set Python path
-ENV PYTHONPATH=/app
+RUN apk add --no-cache ca-certificates wget
 
-# Switch to non-root user
-USER 1000
+WORKDIR /app
+COPY mcp-server/package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)" || exit 1
+RUN mkdir -p /app/data && chown node:node /app/data
 
-# Default command
-CMD ["python", "-m", "src.mcp_server"]
+USER node
+EXPOSE 8081
+
+CMD ["node", "dist/index.js"]

@@ -53,8 +53,9 @@ describe('Streamable HTTP Transport', () => {
     await client.connect(transport);
 
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(5);
+    expect(tools.length).toBe(10);
     expect(tools.map(t => t.name)).toContain('accounts');
+    expect(tools.map(t => t.name)).toContain('get_financial_snapshot');
 
     await client.close();
   });
@@ -119,8 +120,8 @@ describe('Streamable HTTP Transport', () => {
     await client2.connect(transport2);
 
     const [tools1, tools2] = await Promise.all([client1.listTools(), client2.listTools()]);
-    expect(tools1.tools.length).toBe(5);
-    expect(tools2.tools.length).toBe(5);
+    expect(tools1.tools.length).toBe(10);
+    expect(tools2.tools.length).toBe(10);
 
     await client1.close();
     await client2.close();
