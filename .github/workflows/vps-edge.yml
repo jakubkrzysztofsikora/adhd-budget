@@ -30,24 +30,16 @@ jobs:
             echo "User: $(whoami)"
             echo "Hostname: $(hostname)"
             echo "IP: $(hostname -I 2>/dev/null || true)"
-            
+
             if [ "$CMD_INPUT" = "inspect" ]; then
               echo "=== DOCKER CONTAINERS ==="
               docker ps -a
-              
+
               echo "=== TAILSCALE STATUS ==="
-              tailscale status 2>&1 || echo "tailscale CLI not found or inactive"
-              
+              sudo tailscale status 2>&1 || echo "tailscale CLI not found or inactive"
+
               echo "=== CONNECTIVITY TO K3S (100.69.232.58:30081) ==="
               curl -s -o /dev/null -w "K3S Health HTTP Status: %{http_code}\n" --connect-timeout 5 http://100.69.232.58:30081/health || echo "Direct curl to k3s failed"
-              
-              echo "=== CHECKING OLD SESSIONS.DB ON VPS ==="
-              find /home/${USER}/adhd-budget /var/lib/docker/volumes/ -name "sessions.db" -o -name "oauth.db" 2>/dev/null || true
-              
-              if docker ps -q --filter name=mcp-server | grep -q .; then
-                echo "=== DUMPING SESSIONS FROM RUNNING MCP CONTAINER ==="
-                docker exec $(docker ps -q --filter name=mcp-server | head -1) ls -la /app/data/ 2>/dev/null || true
-              fi
             elif [ "$CMD_INPUT" = "deploy-edge" ]; then
               echo "=== TEARING DOWN MONOLITHIC BACKEND ON VPS ==="
               cd /home/${USER}/adhd-budget
@@ -57,109 +49,10 @@ jobs:
               rm -rf keys/ .env
 
               echo "=== WRITING EDGE CADDYFILE ==="
-              cat << 'CADDY_EOF' > Caddyfile
-:80 {
-    header {
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
-
-    handle /health {
-        reverse_proxy http://100.69.232.58:30081
-    }
-
-    handle /mcp* {
-        reverse_proxy http://100.69.232.58:30081 {
-            flush_interval -1
-            header_up Accept-Encoding identity
-            header_down Cache-Control no-cache
-            header_down X-Accel-Buffering no
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /.well-known/* {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /authorize {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /token {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /register {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /revoke {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /auth/* {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /connect* {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle /debug/* {
-        reverse_proxy http://100.69.232.58:30081 {
-            header_up X-Forwarded-Proto https
-            header_up X-Forwarded-Host {host}
-        }
-    }
-
-    handle {
-        respond "ADHD Budget Assistant Edge" 200
-    }
-}
-CADDY_EOF
+              echo "IyBQcm9kdWN0aW9uIENhZGR5IEVkZ2UgY29uZmlndXJhdGlvbiDigJQgSFRUUCBvbmx5IChDbG91ZGZsYXJlIGhhbmRsZXMgVExTKQo6ODAgewogICAgIyBTZWN1cml0eSBoZWFkZXJzCiAgICBoZWFkZXIgewogICAgICAgIFgtQ29udGVudC1UeXBlLU9wdGlvbnMgIm5vc25pZmYiCiAgICAgICAgWC1GcmFtZS1PcHRpb25zICJERU5ZIgogICAgICAgIFJlZmVycmVyLVBvbGljeSAic3RyaWN0LW9yaWdpbi13aGVuLWNyb3NzLW9yaWdpbiIKICAgIH0KCiAgICAjIEhlYWx0aCBlbmRwb2ludAogICAgaGFuZGxlIC9oZWFsdGggewogICAgICAgIHJldmVyc2VfcHJveHkgaHR0cDovLzEwMC42OS4yMzIuNTg6MzAwODEKICAgIH0KCiAgICAjIE1DUCBTZXJ2ZXIg4oCUIFN0cmVhbWFibGUgSFRUUCB3aXRoIFNTRQogICAgaGFuZGxlIC9tY3AqIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgZmx1c2hfaW50ZXJ2YWwgLTEKICAgICAgICAgICAgaGVhZGVyX3VwIEFjY2VwdC1FbmNvZGluZyBpZGVudGl0eQogICAgICAgICAgICBoZWFkZXJfZG93biBDYWNoZS1Db250cm9sIG5vLWNhY2hlCiAgICAgICAgICAgIGhlYWRlcl9kb3duIFgtQWNjZWwtQnVmZmVyaW5nIG5vCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Qcm90byBodHRwcwogICAgICAgICAgICBoZWFkZXJfdXAgWC1Gb3J3YXJkZWQtSG9zdCB7aG9zdH0KICAgICAgICB9CiAgICB9CgogICAgIyBPQXV0aCBkaXNjb3ZlcnkKICAgIGhhbmRsZSAvLndlbGwta25vd24vKiB7CiAgICAgICAgcmV2ZXJzZV9wcm94eSBodHRwOi8vMTAwLjY5LjIzMi41ODozMDA4MSB7CiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Qcm90byBodHRwcwogICAgICAgICAgICBoZWFkZXJfdXAgWC1Gb3J3YXJkZWQtSG9zdCB7aG9zdH0KICAgICAgICB9CiAgICB9CgogICAgIyBPQXV0aCBlbmRwb2ludHMgKENsYXVkZS5haSAvIENoYXRHUFQgLyBjdXN0b20gY2xpZW50cykKICAgIGhhbmRsZSAvYXV0aG9yaXplIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICBoYW5kbGUgL3Rva2VuIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICBoYW5kbGUgL3JlZ2lzdGVyIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICBoYW5kbGUgL3Jldm9rZSB7CiAgICAgICAgcmV2ZXJzZV9wcm94eSBodHRwOi8vMTAwLjY5LjIzMi41ODozMDA4MSB7CiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Qcm90byBodHRwcwogICAgICAgICAgICBoZWFkZXJfdXAgWC1Gb3J3YXJkZWQtSG9zdCB7aG9zdH0KICAgICAgICB9CiAgICB9CgogICAgIyBFbmFibGUgQmFua2luZyBjYWxsYmFjayBhbmQgY29ubmVjdCBkYXNoYm9hcmQKICAgIGhhbmRsZSAvYXV0aC8qIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICBoYW5kbGUgL2Nvbm5lY3QqIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICAjIERlYnVnIGVuZHBvaW50cwogICAgaGFuZGxlIC9kZWJ1Zy8qIHsKICAgICAgICByZXZlcnNlX3Byb3h5IGh0dHA6Ly8xMDAuNjkuMjMyLjU4OjMwMDgxIHsKICAgICAgICAgICAgaGVhZGVyX3VwIFgtRm9yd2FyZGVkLVByb3RvIGh0dHBzCiAgICAgICAgICAgIGhlYWRlcl91cCBYLUZvcndhcmRlZC1Ib3N0IHtob3N0fQogICAgICAgIH0KICAgIH0KCiAgICAjIERlZmF1bHQKICAgIGhhbmRsZSB7CiAgICAgICAgcmVzcG9uZCAiQURIRCBCdWRnZXQgQXNzaXN0YW50IEVkZ2UiIDIwMAogICAgfQp9Cg==" | base64 -d > Caddyfile
 
               echo "=== WRITING DOCKER-COMPOSE.YML FOR EDGE ==="
-              cat << 'COMPOSE_EOF' > docker-compose.yml
-services:
-  reverse-proxy:
-    image: caddy:2-alpine
-    network_mode: host
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    restart: unless-stopped
-    mem_limit: 128m
-    cpus: '0.25'
-
-volumes:
-  caddy_data:
-  caddy_config:
-COMPOSE_EOF
+              echo "c2VydmljZXM6CiAgcmV2ZXJzZS1wcm94eToKICAgIGltYWdlOiBjYWRkeToyLWFscGluZQogICAgbmV0d29ya19tb2RlOiBob3N0CiAgICB2b2x1bWVzOgogICAgICAtIC4vQ2FkZHlmaWxlOi9ldGMvY2FkZHkvQ2FkZHlmaWxlOnJvCiAgICAgIC0gY2FkZHlfZGF0YTovZGF0YQogICAgICAtIGNhZGR5X2NvbmZpZzovY29uZmlnCiAgICByZXN0YXJ0OiB1bmxlc3Mtc3RvcHBlZAogICAgbWVtX2xpbWl0OiAxMjhtCiAgICBjcHVzOiAnMC4yNScKCnZvbHVtZXM6CiAgY2FkZHlfZGF0YToKICBjYWRkeV9jb25maWc6Cg==" | base64 -d > docker-compose.yml
 
               echo "=== STARTING EDGE PROXY CONTAINER ==="
               docker compose up -d --force-recreate
