@@ -27,6 +27,8 @@ export interface Config {
   enableApiBaseUrl: string;
   dataDir: string;
   mcpToken: string;
+  oauthUsers: Map<string, string>;
+  defaultUser: string;
 }
 
 import { existsSync } from 'node:fs';
@@ -46,6 +48,36 @@ if (process.env.NODE_ENV !== 'test') {
   }
 }
 
+export function parseOAuthUsers(
+  rawUsers?: string,
+  defaultUser: string = 'jakub',
+  defaultPassword?: string,
+): Map<string, string> {
+  const users = new Map<string, string>();
+  if (rawUsers && rawUsers.trim()) {
+    const pairs = rawUsers.split(/[,;]/);
+    for (const pair of pairs) {
+      const trimmed = pair.trim();
+      if (!trimmed) continue;
+      const sepIdx = trimmed.indexOf(':') !== -1 ? trimmed.indexOf(':') : trimmed.indexOf('=');
+      if (sepIdx !== -1) {
+        const u = trimmed.slice(0, sepIdx).trim();
+        const p = trimmed.slice(sepIdx + 1).trim();
+        if (u && p) {
+          users.set(u, p);
+        }
+      }
+    }
+  }
+
+  if (users.size === 0) {
+    const password = process.env.OAUTH_PASSWORD || defaultPassword || 'adhd_budget_secret_token_2026';
+    users.set(defaultUser, password);
+  }
+
+  return users;
+}
+
 export function getConfig(): Config {
   let privateKeyPath = process.env.ENABLE_PRIVATE_KEY_PATH || '';
   if (privateKeyPath && !existsSync(privateKeyPath)) {
@@ -54,6 +86,10 @@ export function getConfig(): Config {
       privateKeyPath = parentCandidate;
     }
   }
+
+  const defaultUser = process.env.OAUTH_DEFAULT_USER || 'jakub';
+  const mcpToken = process.env.MCP_TOKEN || 'adhd_budget_secret_token_2026';
+  const oauthUsers = parseOAuthUsers(process.env.OAUTH_USERS, defaultUser, process.env.OAUTH_PASSWORD || mcpToken);
 
   return {
     port: parseInt(process.env.PORT || '8081', 10),
@@ -65,6 +101,9 @@ export function getConfig(): Config {
     enablePrivateKeyPath: privateKeyPath,
     enableApiBaseUrl: process.env.ENABLE_API_BASE_URL || 'https://api.enablebanking.com',
     dataDir: process.env.DATA_DIR || './data',
-    mcpToken: process.env.MCP_TOKEN || 'adhd_budget_secret_token_2026',
+    mcpToken,
+    oauthUsers,
+    defaultUser,
   };
 }
+

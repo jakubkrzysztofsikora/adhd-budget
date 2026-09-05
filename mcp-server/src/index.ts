@@ -35,8 +35,10 @@ if (config.enableAppId && config.enablePrivateKeyPath) {
       aspspName: config.aspspName,
       aspspCountry: config.aspspCountry,
       enableBankingClient: ebClient,
+      staticUsers: config.oauthUsers,
+      defaultUser: config.defaultUser,
     });
-    logger.info('Enable Banking OAuth provider initialized');
+    logger.info({ users: Array.from(config.oauthUsers.keys()) }, 'OAuth provider initialized with static users');
   } catch (err) {
     logger.warn({ err }, 'Failed to initialize Enable Banking client — running without auth');
   }
@@ -48,9 +50,11 @@ const allowedHosts = config.host === '0.0.0.0'
   ? undefined
   : ['localhost', '127.0.0.1', 'host.docker.internal', externalHostname];
 const app = createMcpExpressApp({ host: config.host, allowedHosts });
+app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
 
 // In-memory pending connects for /connect/start -> /auth/eb-callback
 const pendingConnects = new Map<string, { bankKey: string; aspspName: string; aspspCountry: string; createdAt: number }>();
@@ -267,9 +271,11 @@ app.get('/connect', (req, res) => {
       <pre><code>URL: ${config.externalUrl}/mcp
 Header: Authorization: Bearer ${config.mcpToken}</code></pre>
 
-      <h3>3. Claude AI (Web)</h3>
-      <p style="font-size:0.85rem;color:var(--muted);">Add Custom Remote MCP in Claude Web Settings:</p>
-      <pre><code>${config.externalUrl}/mcp</code></pre>
+      <h3>3. Claude AI (Web & Desktop)</h3>
+      <p style="font-size:0.85rem;color:var(--muted);">Add Custom Remote MCP in Claude Settings &rarr; Integrations:</p>
+      <pre><code>URL: ${config.externalUrl}/mcp</code></pre>
+      <p style="font-size:0.85rem;color:var(--muted);">When prompted in the popup window, log in with username: <code>${config.defaultUser}</code></p>
+
     </div>
   </div>
 </body>
@@ -363,7 +369,7 @@ app.post('/connect/import-session', async (req, res) => {
     const aspspCountry = fullSession.aspsp?.country || 'PL';
     const bankKey = matchBankKey(aspspName);
     const accounts = fullSession.accounts || [];
-    const accountUids = accounts.map(a => a.uid);
+    const accountUids = accounts.map((a: unknown) => typeof a === 'string' ? a : ((a as { uid?: string; account_id?: string })?.uid || (a as { uid?: string; account_id?: string })?.account_id || String(a)));
 
     sessionStore.saveBankConnection({
       bank_key: bankKey,
@@ -420,7 +426,8 @@ if (oauthProvider) {
       try {
         const session = await ebClient!.createSession(code);
         const fullSession = await ebClient!.getSession(session.session_id);
-        const accountUids = fullSession.accounts ? fullSession.accounts.map(a => a.uid) : [];
+        const accounts = fullSession.accounts || [];
+        const accountUids = accounts.map((a: unknown) => typeof a === 'string' ? a : ((a as { uid?: string; account_id?: string })?.uid || (a as { uid?: string; account_id?: string })?.account_id || String(a)));
 
         sessionStore.saveBankConnection({
           bank_key: pending.bankKey,
@@ -459,7 +466,13 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 function createServerForSession(authInfo?: AuthInfo): McpServer {
   const ctx: ToolContext = {
     getClient: () => ebClient,
-    getAccountUids: () => (authInfo?.extra?.accountUids as string[]) ?? [],
+    getAccountUids: () => {
+      const explicit = (authInfo?.extra?.accountUids as string[]) ?? [];
+      if (explicit.length > 0 && !explicit.includes('*')) {
+        return explicit;
+      }
+      return sessionStore.getAllBankConnections().flatMap(b => b.account_uids);
+    },
     getSessionId: () => (authInfo?.extra?.ebSessionId as string) ?? null,
     getSessionStore: () => sessionStore,
   };
@@ -488,13 +501,14 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
       token: config.mcpToken,
       clientId: 'bearer-client',
       scopes: ['banking'],
-      extra: { staticAuth: true },
+      extra: { staticAuth: true, userId: config.defaultUser },
     };
     return next();
   }
 
   return rawOAuthMiddleware(req, res, next);
 };
+
 
 // POST /mcp
 app.post('/mcp', authMiddleware, async (req, res) => {

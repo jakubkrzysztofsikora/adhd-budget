@@ -27,15 +27,13 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-interface PendingAuth {
-  eb_state: string;
-  claude_state: string;
-  client_id: string;
-  redirect_uri: string;
-  code_challenge: string;
-  code_challenge_method: string;
-  created_at: number;
-  expires_at: number;
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 interface AuthCodeRecord {
@@ -63,22 +61,23 @@ interface RefreshTokenRecord {
 export interface EnableBankingOAuthProviderOptions {
   dataDir: string;
   externalUrl: string;
-  aspspName: string;
-  aspspCountry: string;
-  enableBankingClient: EnableBankingClient;
+  aspspName?: string;
+  aspspCountry?: string;
+  enableBankingClient?: EnableBankingClient | null;
+  staticUsers?: Map<string, string>;
+  defaultUser?: string;
 }
 
 export class EnableBankingOAuthProvider implements OAuthServerProvider {
   private _clientsStore: ClientRegistry;
   private sessionStore: SessionStore;
   private db: Database.Database;
-  private ebClient: EnableBankingClient;
-  private externalUrl: string;
-  private aspspName: string;
-  private aspspCountry: string;
+  private ebClient?: EnableBankingClient | null;
+  private staticUsers: Map<string, string>;
+  private defaultUser: string;
 
   constructor(options: EnableBankingOAuthProviderOptions) {
-    const { dataDir, externalUrl, aspspName, aspspCountry, enableBankingClient } = options;
+    const { dataDir, enableBankingClient, staticUsers, defaultUser } = options;
     mkdirSync(dataDir, { recursive: true });
 
     this._clientsStore = new ClientRegistry(`${dataDir}/clients.db`);
@@ -87,16 +86,6 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     this.db = new Database(`${dataDir}/oauth.db`);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS pending_auths (
-        eb_state TEXT PRIMARY KEY,
-        claude_state TEXT NOT NULL,
-        client_id TEXT NOT NULL,
-        redirect_uri TEXT NOT NULL,
-        code_challenge TEXT NOT NULL,
-        code_challenge_method TEXT DEFAULT 'S256',
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS auth_codes (
         code_hash TEXT PRIMARY KEY,
         eb_session_id TEXT NOT NULL,
@@ -120,9 +109,10 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     `);
 
     this.ebClient = enableBankingClient;
-    this.externalUrl = externalUrl;
-    this.aspspName = aspspName;
-    this.aspspCountry = aspspCountry;
+    this.staticUsers = staticUsers && staticUsers.size > 0
+      ? staticUsers
+      : new Map([['jakub', 'adhd_budget_secret_token_2026']]);
+    this.defaultUser = defaultUser || 'jakub';
   }
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -134,49 +124,334 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
-    const ebState = randomBytes(32).toString('base64url');
-    const now = Date.now();
+    const req = (res as Response & { req?: { method?: string; body?: Record<string, unknown> } }).req;
+    const method = req?.method || 'GET';
 
-    logger.info({ clientId: client.client_id }, 'oauth.authorize.started');
+    if (method === 'POST') {
+      const body = req?.body || {};
+      const username = (typeof body.username === 'string' ? body.username : '').trim();
+      const password = (typeof body.password === 'string' ? body.password : '').trim();
 
-    // Store pending auth linking EB state -> Claude context
-    this.db.prepare(`
-      INSERT INTO pending_auths (eb_state, claude_state, client_id, redirect_uri, code_challenge, code_challenge_method, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      ebState,
-      params.state || '',
-      client.client_id,
-      params.redirectUri,
-      params.codeChallenge,
-      'S256',
-      now,
-      now + 300_000, // 5 min TTL
-    );
+      let authenticatedUser: string | null = null;
 
-    try {
-      // Call Enable Banking to get bank redirect URL
-      const callbackUrl = `${this.externalUrl}/auth/eb-callback`;
-      const ebResponse = await this.ebClient.initiateAuth(
-        this.aspspName,
-        this.aspspCountry,
-        callbackUrl,
-        ebState,
+      if (this.staticUsers.size === 1) {
+        // Single user mode: allow matching password even if username is blank or matches
+        const [singleUser, singlePass] = Array.from(this.staticUsers.entries())[0];
+        if ((!username || username.toLowerCase() === singleUser.toLowerCase()) && password === singlePass) {
+          authenticatedUser = singleUser;
+        }
+      } else {
+        // Multi-user mode: exact match on username & password
+        const expectedPass = this.staticUsers.get(username);
+        if (expectedPass && expectedPass === password) {
+          authenticatedUser = username;
+        }
+      }
+
+      if (!authenticatedUser) {
+        logger.warn({ clientId: client.client_id, username }, 'oauth.authorize.invalid_credentials');
+        this.renderAuthorizationPage(client, params, res, 'Invalid username or password. Please try again.');
+        return;
+      }
+
+      // Successful authentication: issue authorization code
+      const authCode = generateToken();
+      const now = Date.now();
+
+      this.db.prepare(`
+        INSERT INTO auth_codes (code_hash, eb_session_id, account_uids, client_id, redirect_uri, code_challenge, created_at, expires_at, used)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(
+        hashToken(authCode),
+        authenticatedUser,
+        JSON.stringify(['*']), // '*' indicates access to all connected accounts
+        client.client_id,
+        params.redirectUri,
+        params.codeChallenge,
+        now,
+        now + 300_000, // 5 min TTL
       );
 
-      logger.info({ clientId: client.client_id }, 'oauth.authorize.redirecting_to_bank');
-      res.redirect(ebResponse.url);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      logger.error({ err: errMsg, clientId: client.client_id }, 'oauth.authorize.failed');
-      // Redirect back to client with error (include actual error for debugging)
-      const errorUrl = new URL(params.redirectUri);
-      errorUrl.searchParams.set('error', 'server_error');
-      errorUrl.searchParams.set('error_description', `Bank auth failed: ${errMsg}`);
-      if (params.state) errorUrl.searchParams.set('state', params.state);
-      res.redirect(errorUrl.toString());
+      logger.info({ clientId: client.client_id, user: authenticatedUser }, 'oauth.authorize.code_issued');
+
+      const redirectUrl = new URL(params.redirectUri);
+      redirectUrl.searchParams.set('code', authCode);
+      if (params.state) {
+        redirectUrl.searchParams.set('state', params.state);
+      }
+
+      res.redirect(redirectUrl.toString());
+      return;
     }
+
+    // GET request: render the authorization page
+    this.renderAuthorizationPage(client, params, res);
   }
+
+  private renderAuthorizationPage(
+    client: OAuthClientInformationFull,
+    params: AuthorizationParams,
+    res: Response,
+    errorMessage?: string,
+  ): void {
+    const clientName = client.client_name || client.client_id;
+    const connections = this.sessionStore.getAllBankConnections();
+    const totalAccounts = connections.reduce((sum, c) => sum + c.account_uids.length, 0);
+
+    const cancelUrl = new URL(params.redirectUri);
+    cancelUrl.searchParams.set('error', 'access_denied');
+    cancelUrl.searchParams.set('error_description', 'User denied authorization');
+    if (params.state) cancelUrl.searchParams.set('state', params.state);
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorize AI Assistant — ADHD Budget</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 90vh;
+    }
+    .auth-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 480px;
+      width: 100%;
+      padding: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    .header h1 {
+      font-size: 1.5rem;
+      margin: 0 0 0.5rem 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .header p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0;
+    }
+    .client-box {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.85rem;
+    }
+    .client-box strong {
+      color: #38bdf8;
+    }
+    .banks-box {
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+    }
+    .banks-title {
+      font-weight: 600;
+      color: var(--success);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .bank-item {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text);
+      padding: 0.25rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .bank-item:last-child {
+      border-bottom: none;
+    }
+    .bank-item span.count {
+      color: var(--muted);
+    }
+    .alert-error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--danger);
+      color: #f87171;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
+      font-size: 0.875rem;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+      color: var(--text);
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #090d16;
+      color: var(--text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--accent);
+    }
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.75rem;
+    }
+    .btn {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      border: none;
+      display: inline-block;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+    .footer {
+      text-align: center;
+      margin-top: 1.25rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <div class="header">
+      <h1>🏦 ADHD Budget</h1>
+      <p>Authorize AI Assistant to Access Polish Banks</p>
+    </div>
+
+    ${errorMessage ? `<div class="alert-error">${escapeHtml(errorMessage)}</div>` : ''}
+
+    <div class="client-box">
+      <div>Client: <strong>${escapeHtml(clientName)}</strong></div>
+      <div style="color: var(--muted); margin-top: 0.25rem; font-size: 0.8rem; word-break: break-all;">
+        Redirect: ${escapeHtml(params.redirectUri)}
+      </div>
+    </div>
+
+    <div class="banks-box">
+      <div class="banks-title">
+        <span>✓</span> Unified Access to Connected Banks (${totalAccounts} accounts)
+      </div>
+      ${connections.length > 0 ? connections.map(c => `
+        <div class="bank-item">
+          <span>${escapeHtml(c.aspsp_name)}</span>
+          <span class="count">${c.account_uids.length} account(s)</span>
+        </div>
+      `).join('') : '<div style="color: var(--muted);">No bank accounts linked yet. Link them in the Bank Hub.</div>'}
+    </div>
+
+    <form method="POST" action="/authorize">
+      <input type="hidden" name="client_id" value="${escapeHtml(client.client_id)}" />
+      <input type="hidden" name="redirect_uri" value="${escapeHtml(params.redirectUri)}" />
+      <input type="hidden" name="response_type" value="code" />
+      <input type="hidden" name="code_challenge" value="${escapeHtml(params.codeChallenge)}" />
+      <input type="hidden" name="code_challenge_method" value="S256" />
+      ${params.state ? `<input type="hidden" name="state" value="${escapeHtml(params.state)}" />` : ''}
+      ${params.scopes && params.scopes.length > 0 ? `<input type="hidden" name="scope" value="${escapeHtml(params.scopes.join(' '))}" />` : ''}
+
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input 
+          id="username" 
+          type="text" 
+          name="username" 
+          value="${escapeHtml(this.defaultUser)}" 
+          autocomplete="username" 
+          required 
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input 
+          id="password" 
+          type="password" 
+          name="password" 
+          placeholder="Enter password" 
+          autocomplete="current-password" 
+          required 
+          autofocus 
+        />
+      </div>
+
+      <div class="actions">
+        <a href="${escapeHtml(cancelUrl.toString())}" class="btn btn-secondary">Deny</a>
+        <button type="submit" class="btn btn-primary">Authorize Access</button>
+      </div>
+    </form>
+
+    <div class="footer">
+      Private self-hosted OAuth 2.1 gateway • Jakub Sikora
+    </div>
+  </div>
+</body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  }
+
 
   async challengeForAuthorizationCode(
     _client: OAuthClientInformationFull,
@@ -282,15 +557,15 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     // Rotate: revoke old refresh token
     this.db.prepare('UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?').run(tokenHash);
 
-    // Generate new tokens
+    // Generate new tokens (90 days)
     const newAccessToken = generateToken();
     const newRefreshToken = generateToken();
-    const expiresIn = 3600;
+    const expiresIn = 90 * 24 * 3600;
 
     this.sessionStore.store(
       newAccessToken,
       record.eb_session_id,
-      JSON.parse(record.account_uids),
+      ['*'],
       Date.now() + expiresIn * 1000,
     );
 
@@ -303,7 +578,7 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       record.account_uids,
       client.client_id,
       Date.now(),
-      Date.now() + 30 * 24 * 3600_000,
+      Date.now() + 90 * 24 * 3600_000,
     );
 
     logger.info({ clientId: client.client_id }, 'oauth.refresh.issued');
@@ -322,14 +597,20 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
       throw new InvalidTokenError('Invalid or expired access token');
     }
 
+    // Live resolution of all active bank connections
+    const allBankConnections = this.sessionStore.getAllBankConnections();
+    const allAccountUids = allBankConnections.flatMap(b => b.account_uids);
+
     return {
       token,
-      clientId: '', // We don't track client per access token
-      scopes: [],
+      clientId: '',
+      scopes: ['banking'],
       expiresAt: Math.floor(session.expires_at / 1000),
       extra: {
+        userId: session.eb_session_id,
+        allAccounts: true,
+        accountUids: allAccountUids,
         ebSessionId: session.eb_session_id,
-        accountUids: session.account_uids,
       },
     };
   }
@@ -349,59 +630,15 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     logger.info('oauth.token.revoked');
   }
 
-  // --- Enable Banking callback handler (not part of OAuthServerProvider) ---
-
-  async handleEbCallback(ebCode: string, ebState: string): Promise<{ redirectUrl: string } | { error: string }> {
-    // Look up pending auth
-    const pending = this.db.prepare(
-      'SELECT * FROM pending_auths WHERE eb_state = ? AND expires_at > ?',
-    ).get(ebState, Date.now()) as PendingAuth | undefined;
-
-    if (!pending) {
-      logger.warn('oauth.eb_callback.invalid_state');
-      return { error: 'Invalid or expired state' };
+  async handleEbCallback(ebCode: string, _ebState: string): Promise<{ redirectUrl: string } | { error: string }> {
+    if (!this.ebClient) {
+      return { error: 'Enable Banking client not initialized' };
     }
-
-    // Delete pending auth (single-use)
-    this.db.prepare('DELETE FROM pending_auths WHERE eb_state = ?').run(ebState);
-
     try {
-      // Exchange EB code for session
-      const session = await this.ebClient.createSession(ebCode);
-      const accountUids = session.accounts.map(a => a.uid);
-
-      // Generate MCP authorization code
-      const mcpCode = generateToken();
-      this.db.prepare(`
-        INSERT INTO auth_codes (code_hash, eb_session_id, account_uids, client_id, redirect_uri, code_challenge, created_at, expires_at, used)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `).run(
-        hashToken(mcpCode),
-        session.session_id,
-        JSON.stringify(accountUids),
-        pending.client_id,
-        pending.redirect_uri,
-        pending.code_challenge,
-        Date.now(),
-        Date.now() + 300_000, // 5 min TTL
-      );
-
-      // Build redirect URL back to Claude
-      const redirectUrl = new URL(pending.redirect_uri);
-      redirectUrl.searchParams.set('code', mcpCode);
-      if (pending.claude_state) {
-        redirectUrl.searchParams.set('state', pending.claude_state);
-      }
-
-      logger.info({ clientId: pending.client_id }, 'oauth.eb_callback.success');
-      return { redirectUrl: redirectUrl.toString() };
+      await this.ebClient.createSession(ebCode);
+      return { redirectUrl: '/connect?status=connected' };
     } catch (err) {
-      logger.error({ err }, 'oauth.eb_callback.session_creation_failed');
-      const errorUrl = new URL(pending.redirect_uri);
-      errorUrl.searchParams.set('error', 'server_error');
-      errorUrl.searchParams.set('error_description', 'Failed to create bank session');
-      if (pending.claude_state) errorUrl.searchParams.set('state', pending.claude_state);
-      return { redirectUrl: errorUrl.toString() };
+      return { error: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -415,3 +652,6 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
     this.db.close();
   }
 }
+
+export { EnableBankingOAuthProvider as OAuthProvider };
+
