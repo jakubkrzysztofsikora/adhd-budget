@@ -18,7 +18,7 @@ describe('Polish Finance Analysis', () => {
 
     const t2 = cleanMerchantAndCategory('PŁATNOŚĆ KARTĄ 04.09.2026 ŻABKA Z4920 KRAKÓW PL');
     expect(t2.merchant).toBe('Żabka');
-    expect(t2.category).toBe('Groceries');
+    expect(t2.category).toBe('Convenience / Snacks');
 
     const t3 = cleanMerchantAndCategory('STACJA PALIW ORLEN NR 1234');
     expect(t3.merchant).toBe('Orlen');

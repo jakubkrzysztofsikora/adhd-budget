@@ -59,7 +59,7 @@ export interface CashflowForecast {
 const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }> = [
   // Groceries
   { regex: /biedronka/i, name: 'Biedronka', category: 'Groceries' },
-  { regex: /żabka|zabka/i, name: 'Żabka', category: 'Groceries' },
+  { regex: /żabka|zabka/i, name: 'Żabka', category: 'Convenience / Snacks' },
   { regex: /dino\s+(polska|nr)?/i, name: 'Dino', category: 'Groceries' },
   { regex: /lidl/i, name: 'Lidl', category: 'Groceries' },
   { regex: /kaufland/i, name: 'Kaufland', category: 'Groceries' },

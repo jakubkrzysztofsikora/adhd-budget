@@ -139,6 +139,17 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     }
   }
 
+  // Convenience & Habit Spending watchlist (Żabka, sweets, energy drinks, nicotine)
+  const convenienceTxs = analysis.todayTransactions.filter(
+    t => t.merchant === 'Żabka' || t.category === 'Convenience / Snacks'
+  );
+  if (convenienceTxs.length > 0) {
+    const totalConvenience = convenienceTxs.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    textLines.push(`👁️ POD OBSERWACJĄ — NAWYKI I PRZEKĄSKI (Żabka: ${totalConvenience.toFixed(2)} PLN dzisiaj):`);
+    textLines.push(`  • ${convenienceTxs.length} zakupy w Żabce (${convenienceTxs.map(t => `${Math.abs(t.amount).toFixed(2)} PLN`).join(', ')}).`);
+    textLines.push(`  💡 Wskazówka: Drobne zakupy (słodycze, nikotyna, napoje) to wygoda, ale kumulują się z marżą convenience. Kupuj ulubione rzeczy z wyprzedzeniem w dyskoncie.`);
+  }
+
   // Normal living expenses
   const normalExpenses = analysis.todayTransactions.filter(
     t => !t.is_income && t.amount < 0 && !t.is_internal_transfer && !analysis.harmfulTransactions.some(h => h.transaction.id === t.id)
@@ -352,6 +363,18 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
             </li>
           `).join('')}
         </ul>
+      </div>
+    ` : ''}
+
+    ${convenienceTxs.length > 0 ? `
+      <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.25); border-left: 4px solid #eab308; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px;">
+        <span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15;">👁️ Pod obserwacją — Nawyki i przekąski (Żabka)</span>
+        <div style="font-size: 0.92rem; color: #e2e8f0; margin-top: 6px;">
+          <strong>${convenienceTxs.length} zakupy</strong> o łącznej wartości <strong>${convenienceTxs.reduce((s, t) => s + Math.abs(t.amount), 0).toFixed(2)} PLN</strong>.
+        </div>
+        <div style="font-size: 0.82rem; color: #94a3b8; margin-top: 4px;">
+          To nie jest zły wydatek, ale drobne zakupy (słodycze, nikotyna, energetyki) kumulują się w tle. Zrób zapas ulubionych produktów w dyskoncie, by nie przepłacać z marżą convenience.
+        </div>
       </div>
     ` : ''}
 
