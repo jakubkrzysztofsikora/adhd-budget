@@ -43,37 +43,37 @@ export interface ImprovementPlanState {
 export const DEFAULT_PLAN_STEPS: ImprovementPlanStep[] = [
   {
     step_number: 1,
-    title: 'Freeze New BNPL & Pay-Later Debt',
-    focus: 'Stop creating deferred debts via Allegro Pay, PayPo, Twisto, and Klarna',
-    target_goal: '7 consecutive days with zero new buy-now-pay-later orders',
+    title: 'Zamrożenie nowego długu BNPL i Pay Later',
+    focus: 'Zatrzymanie narastania odroczonych płatności (Allegro Pay, PayPo, Twisto, Klarna)',
+    target_goal: '7 kolejnych dni bez nowych zakupów na raty i odroczonych płatności',
     status: 'active',
   },
   {
     step_number: 2,
-    title: 'Build 1,000 PLN Emergency Micro-Buffer',
-    focus: 'Liquid cash cushion in savings account',
-    target_goal: 'Accumulate and hold 1,000 PLN in savings to stop borrowing for surprises',
+    title: 'Zbudowanie mikro-bufora bezpieczeństwa 1 000 PLN',
+    focus: 'Płynna poduszka gotówkowa na koncie oszczędnościowym na niespodziewane wydatki',
+    target_goal: 'Zgromadzenie i utrzymanie minimum 1 000 PLN wolnych środków w rezerwie',
     status: 'active',
   },
   {
     step_number: 3,
-    title: 'Debt Snowball: Knock Out Smallest Deferred Balance',
-    focus: 'Pay off PayPo / credit cards smallest to largest for fast dopamine wins',
-    target_goal: '0 PLN outstanding balance across all buy-now-pay-later services',
+    title: 'Kula śnieżna zadłużenia: spłata najmniejszego salda',
+    focus: 'Spłacenie kart kredytowych i PayPo od najmniejszego do największego salda',
+    target_goal: '0 PLN salda do spłaty we wszystkich odroczonych usługach i limitach',
     status: 'active',
   },
   {
     step_number: 4,
-    title: 'Prune Recurring Leaks & Food Delivery',
-    focus: 'Reduce food delivery apps (Pyszne/Glovo) and cancel unused subscriptions',
-    target_goal: 'Keep delivery spend under 150 PLN/month & cancel 1 recurring leak',
+    title: 'Likwidacja powtarzalnych wycieków i jedzenia na dowóz',
+    focus: 'Ograniczenie aplikacji z jedzeniem (Pyszne/Glovo/Uber Eats) i anulowanie zbędnych subskrypcji',
+    target_goal: 'Wydatki na dostawy jedzenia poniżej 150 PLN/mies. i wyłączenie min. 1 subskrypcji',
     status: 'active',
   },
   {
     step_number: 5,
-    title: 'Automate Payday Wealth Engine',
-    focus: 'Set standing orders for savings & investments right after salary hits',
-    target_goal: 'Recurring automatic monthly transfer to savings / investment accounts',
+    title: 'Automatyzacja silnika oszczędności i inwestycji',
+    focus: 'Zlecenie stałe na oszczędności i fundusz inwestycyjny w dniu wypłaty',
+    target_goal: 'Automatyczny comiesięczny przelew na inwestycje od razu po wpływie wynagrodzenia',
     status: 'active',
   },
 ];
@@ -131,9 +131,19 @@ export class ImprovementPlanStore {
 
     try {
       const parsed = JSON.parse(row.state_json) as ImprovementPlanState;
-      // Ensure steps array is fully populated if new steps are added
+      // Ensure steps array is fully populated if new steps are added or needs migration to Polish
       if (!parsed.steps || parsed.steps.length === 0) {
         parsed.steps = JSON.parse(JSON.stringify(DEFAULT_PLAN_STEPS));
+      } else {
+        // Automatically sync Polish titles and descriptions while preserving status & completed_at
+        parsed.steps = DEFAULT_PLAN_STEPS.map((defStep, idx) => {
+          const existing = parsed.steps[idx];
+          return {
+            ...defStep,
+            status: existing?.status || defStep.status,
+            completed_at: existing?.completed_at,
+          };
+        });
       }
       return parsed;
     } catch (err) {

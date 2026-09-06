@@ -101,6 +101,59 @@ export class SessionStore {
         );
       `);
     }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS account_cache (
+        account_id TEXT PRIMARY KEY,
+        balances_json TEXT,
+        transactions_json TEXT,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+  }
+
+  saveAccountBalances(accountId: string, balances: unknown[]): void {
+    const now = Date.now();
+    const jsonStr = JSON.stringify(balances);
+    this.db.prepare(`
+      INSERT INTO account_cache (account_id, balances_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET
+        balances_json = excluded.balances_json,
+        updated_at = excluded.updated_at
+    `).run(accountId, jsonStr, now);
+  }
+
+  getAccountBalances(accountId: string): unknown[] | null {
+    const row = this.db.prepare('SELECT balances_json FROM account_cache WHERE account_id = ?').get(accountId) as { balances_json?: string } | undefined;
+    if (!row || !row.balances_json) return null;
+    try {
+      return JSON.parse(row.balances_json);
+    } catch {
+      return null;
+    }
+  }
+
+  saveAccountTransactions(accountId: string, transactions: unknown[]): void {
+    const now = Date.now();
+    const jsonStr = JSON.stringify(transactions);
+    this.db.prepare(`
+      INSERT INTO account_cache (account_id, transactions_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET
+        transactions_json = excluded.transactions_json,
+        updated_at = excluded.updated_at
+    `).run(accountId, jsonStr, now);
+  }
+
+  getAccountTransactions(accountId: string): unknown[] | null {
+    const row = this.db.prepare('SELECT transactions_json FROM account_cache WHERE account_id = ?').get(accountId) as { transactions_json?: string } | undefined;
+    if (!row || !row.transactions_json) return null;
+    try {
+      return JSON.parse(row.transactions_json);
+    } catch {
+      return null;
+    }
   }
 
   saveBankConnection(conn: {

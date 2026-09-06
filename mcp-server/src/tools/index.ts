@@ -25,14 +25,31 @@ const cache = {
 };
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-async function getCachedBalances(client: EnableBankingClient, accountId: string): Promise<EnableBankingBalance[]> {
+async function getCachedBalances(
+  client: EnableBankingClient,
+  accountId: string,
+  sessionStore?: SessionStore | null,
+): Promise<EnableBankingBalance[]> {
   const cached = cache.balances.get(accountId);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
   }
-  const balances = await client.getBalances(accountId);
-  cache.balances.set(accountId, { data: balances, timestamp: Date.now() });
-  return balances;
+  try {
+    const balances = await client.getBalances(accountId);
+    cache.balances.set(accountId, { data: balances, timestamp: Date.now() });
+    if (sessionStore) {
+      sessionStore.saveAccountBalances(accountId, balances);
+    }
+    return balances;
+  } catch (err) {
+    if (sessionStore) {
+      const persisted = sessionStore.getAccountBalances(accountId) as EnableBankingBalance[];
+      if (persisted && persisted.length > 0) {
+        return persisted;
+      }
+    }
+    throw err;
+  }
 }
 
 async function getCachedTransactions(
@@ -40,15 +57,29 @@ async function getCachedTransactions(
   accountId: string,
   dateFrom?: string,
   dateTo?: string,
+  sessionStore?: SessionStore | null,
 ): Promise<EnableBankingTransaction[]> {
   const cacheKey = `${accountId}:${dateFrom || ''}:${dateTo || ''}`;
   const cached = cache.transactions.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
   }
-  const txs = await client.getTransactions(accountId, dateFrom, dateTo);
-  cache.transactions.set(cacheKey, { data: txs, timestamp: Date.now() });
-  return txs;
+  try {
+    const txs = await client.getTransactions(accountId, dateFrom, dateTo);
+    cache.transactions.set(cacheKey, { data: txs, timestamp: Date.now() });
+    if (sessionStore) {
+      sessionStore.saveAccountTransactions(accountId, txs);
+    }
+    return txs;
+  } catch (err) {
+    if (sessionStore) {
+      const persisted = sessionStore.getAccountTransactions(accountId) as EnableBankingTransaction[];
+      if (persisted && persisted.length > 0) {
+        return persisted;
+      }
+    }
+    throw err;
+  }
 }
 
 interface AccountTarget {
@@ -128,9 +159,9 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
   server.tool(
     'get_financial_snapshot',
-    'Get unified snapshot of all liquid balances and bank connections across all connected accounts and family members',
+    'Get unified snapshot of all liquid balances, credit lines, and bank connections across all connected accounts and family members',
     {
-      owner: z.string().optional().describe('Optional filter by account owner / person (e.g. Jakub, Karolina)'),
+      owner: z.string().optional().describe('Optional filter by account owner / person (e.g. Jakub, Arleta)'),
     },
     async ({ owner }) => {
       const client = ctx?.getClient();
@@ -142,26 +173,46 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
       const sessionStore = ctx?.getSessionStore?.();
       const connections = sessionStore?.getAllBankConnections(owner) || [];
 
-      let totalPln = 0;
-      let totalEur = 0;
+      let totalLiquidPln = 0;
+      let totalCreditDebtPln = 0;
+      const foreignTotals: Record<string, number> = {};
       const accountsSummary: Array<Record<string, unknown>> = [];
 
       for (const target of targets) {
         try {
-          const balances = await getCachedBalances(client, target.accountId);
-          for (const b of balances) {
-            const amt = parseFloat(b.balance_amount.amount);
-            const curr = b.balance_amount.currency;
-            if (curr === 'PLN') totalPln += amt;
-            else if (curr === 'EUR') totalEur += amt;
+          const balances = await getCachedBalances(client, target.accountId, sessionStore);
+          
+          // Deduplicate: pick the single primary balance for this account
+          // Priority: ITAV (Interim Available) > CLBD (Closing Booked) > ITBD (Interim Booked) > first
+          const primary = balances.find(b => b.balance_type === 'ITAV')
+            || balances.find(b => b.balance_type === 'CLBD')
+            || balances.find(b => b.balance_type === 'ITBD')
+            || balances[0];
+
+          if (primary) {
+            const amt = parseFloat(primary.balance_amount.amount);
+            const curr = primary.balance_amount.currency;
+
+            if (curr === 'PLN') {
+              if (amt >= 0) totalLiquidPln += amt;
+              else totalCreditDebtPln += Math.abs(amt);
+            } else {
+              foreignTotals[curr] = (foreignTotals[curr] || 0) + amt;
+            }
 
             accountsSummary.push({
               owner: target.ownerName,
               bank: target.aspspName,
               account_id: target.accountId,
-              balance_type: b.balance_type,
+              balance_type: primary.balance_type,
               amount: amt,
               currency: curr,
+              is_credit_debt: amt < 0,
+              all_balances: balances.map(b => ({
+                type: b.balance_type,
+                amount: parseFloat(b.balance_amount.amount),
+                currency: b.balance_amount.currency,
+              })),
             });
           }
         } catch (err) {
@@ -175,21 +226,53 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
       }
 
       // Group totals by owner / person
-      const byOwner: Record<string, { total_liquid_pln: number; total_liquid_eur: number; accounts_count: number }> = {};
+      const byOwner: Record<string, {
+        total_liquid_pln: number;
+        total_liquid_eur: number;
+        liquid_pln: number;
+        credit_debt_pln: number;
+        net_pln: number;
+        accounts_count: number;
+      }> = {};
       for (const acc of accountsSummary) {
         const o = (acc.owner as string) || 'Default';
-        if (!byOwner[o]) byOwner[o] = { total_liquid_pln: 0, total_liquid_eur: 0, accounts_count: 0 };
+        if (!byOwner[o]) {
+          byOwner[o] = {
+            total_liquid_pln: 0,
+            total_liquid_eur: 0,
+            liquid_pln: 0,
+            credit_debt_pln: 0,
+            net_pln: 0,
+            accounts_count: 0,
+          };
+        }
         byOwner[o].accounts_count++;
-        if (acc.currency === 'PLN' && typeof acc.amount === 'number') {
-          byOwner[o].total_liquid_pln = Math.round((byOwner[o].total_liquid_pln + acc.amount) * 100) / 100;
-        } else if (acc.currency === 'EUR' && typeof acc.amount === 'number') {
-          byOwner[o].total_liquid_eur = Math.round((byOwner[o].total_liquid_eur + acc.amount) * 100) / 100;
+        if (typeof acc.amount === 'number') {
+          if (acc.currency === 'PLN') {
+            if (acc.amount >= 0) {
+              byOwner[o].liquid_pln = Math.round((byOwner[o].liquid_pln + acc.amount) * 100) / 100;
+              byOwner[o].total_liquid_pln = byOwner[o].liquid_pln;
+            } else {
+              byOwner[o].credit_debt_pln = Math.round((byOwner[o].credit_debt_pln + Math.abs(acc.amount)) * 100) / 100;
+            }
+            byOwner[o].net_pln = Math.round((byOwner[o].liquid_pln - byOwner[o].credit_debt_pln) * 100) / 100;
+          } else if (acc.currency === 'EUR' && acc.amount >= 0) {
+            byOwner[o].total_liquid_eur = Math.round((byOwner[o].total_liquid_eur + acc.amount) * 100) / 100;
+          }
         }
       }
 
+      const totalEur = foreignTotals['EUR'] || 0;
+
       const result = {
-        total_liquid_pln: Math.round(totalPln * 100) / 100,
+        total_liquid_pln: Math.round(totalLiquidPln * 100) / 100,
         total_liquid_eur: Math.round(totalEur * 100) / 100,
+        total_credit_debt_pln: Math.round(totalCreditDebtPln * 100) / 100,
+        net_pln: Math.round((totalLiquidPln - totalCreditDebtPln) * 100) / 100,
+        foreign_currencies: Object.entries(foreignTotals).map(([curr, amt]) => ({
+          currency: curr,
+          amount: Math.round(amt * 100) / 100,
+        })),
         by_owner: Object.keys(byOwner).length > 1 || owner ? byOwner : undefined,
         connected_banks: connections.map(c => {
           const expiresAt = new Date(c.valid_until).getTime();

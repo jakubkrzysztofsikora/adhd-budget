@@ -1,4 +1,4 @@
-import { CleanTransaction, SubscriptionItem } from '../analysis/polish-finance.js';
+import { CleanTransaction } from '../analysis/polish-finance.js';
 import { ImprovementPlanState } from './plan-store.js';
 
 export interface ExpectedExpenseItem {
@@ -29,6 +29,9 @@ export interface DigestAnalysisResult {
   totalUpcomingWeekPln: number;
   safeDailySpendPln: number;
   liquidBalancePln: number;
+  creditDebtPln: number;
+  netBalancePln: number;
+  foreignBalances?: Array<{ currency: string; amount: number }>;
   winMessage?: string;
 }
 
@@ -49,81 +52,100 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     const topHarm = analysis.harmfulTransactions[0];
     primaryAction = `${topHarm.countermeasure} (${topHarm.timeEstimate})`;
   } else if (analysis.debtTransactions.some(d => d.type === 'bnpl_new_debt')) {
-    primaryAction = `Turn off Pay Later as default checkout on Allegro/stores (2 min)`;
+    primaryAction = 'Wyłącz odroczone płatności (PayPo / Allegro Pay) jako metodę w kasie (2 min)';
+  } else if (analysis.creditDebtPln > 0) {
+    primaryAction = `Sprawdź w Revolut/banku termin spłaty karty (${analysis.creditDebtPln.toFixed(0)} PLN długu) (2 min)`;
   } else if (plan.debt_tracker.estimated_monthly_bnpl_repayments_pln > 0) {
-    primaryAction = `Log into PayPo or Allegro Pay and check next payoff due date (2 min)`;
+    primaryAction = 'Zaloguj się do PayPo / Allegro Pay i sprawdź termin najbliższej spłaty (2 min)';
   } else {
-    primaryAction = `Open your banking app and verify current liquid buffer (${analysis.liquidBalancePln.toFixed(0)} PLN) (1 min)`;
+    primaryAction = `Zaloguj się do banku i potwierdź bezpieczny bufor (${analysis.liquidBalancePln.toFixed(0)} PLN) (1 min)`;
   }
 
   const subject = harmfulCount > 0 
-    ? `ADHD Budget: 1 action today — fix ${analysis.harmfulTransactions[0].transaction.merchant} leak (${analysis.harmfulTransactions[0].timeEstimate})`
-    : `ADHD Budget: Clean day (+win logged) — next week forecast ready`;
+    ? `ADHD Budżet: 1 zadanie na dziś — wyciek w ${analysis.harmfulTransactions[0].transaction.merchant} (${analysis.harmfulTransactions[0].timeEstimate})`
+    : `ADHD Budżet: Czysty dzień (+sukces) — prognoza na ten tydzień`;
 
-  // --- Plain Text Format (Strict i-have-adhd rules) ---
+  // Foreign balances line if available
+  const foreignParts = (analysis.foreignBalances || [])
+    .filter(f => f.currency !== 'PLN' && f.amount > 0)
+    .map(f => `${f.amount.toFixed(2)} ${f.currency}`);
+  const foreignLine = foreignParts.length > 0 ? `• Oszczędności walutowe: ${foreignParts.join(', ')}` : '';
+
+  // --- Plain Text Format (Strict i-have-adhd rules in Polish) ---
   const textLines: string[] = [
-    `ACTION NOW: ${primaryAction}`,
+    `AKCJA TERAZ: ${primaryAction}`,
     '',
-    `STATE: Step ${currentStep.step_number} of 5: ${currentStep.title}`,
-    `• Focus: ${currentStep.focus}`,
-    `• Liquid Balance: ${analysis.liquidBalancePln.toFixed(2)} PLN`,
-    `• Clean Streak: ${plan.habits_tracker.consecutive_days_without_harmful_spend} day(s) without harmful spend`,
-    '',
+    `STAN: Krok ${currentStep.step_number} z 5: ${currentStep.title}`,
+    `• Cel: ${currentStep.target_goal}`,
+    `• Dostępna gotówka (PLN): ${analysis.liquidBalancePln.toFixed(2)} PLN`,
   ];
+
+  if (foreignLine) {
+    textLines.push(foreignLine);
+  }
+
+  if (analysis.creditDebtPln > 0) {
+    textLines.push(`• Zadłużenie na kartach/limitach: ${analysis.creditDebtPln.toFixed(2)} PLN`);
+    textLines.push(`• Bilans netto (PLN): ${analysis.netBalancePln.toFixed(2)} PLN`);
+  }
+
+  textLines.push(`• Czysta seria: ${plan.habits_tracker.consecutive_days_without_harmful_spend} dni bez zbędnych wydatków`);
+  textLines.push('');
 
   // Make wins visible (Dopamine hit)
   if (analysis.winMessage) {
-    textLines.push(`✓ WIN TODAY: ${analysis.winMessage}`);
+    textLines.push(`✓ SUKCES DZISIAJ: ${analysis.winMessage}`);
     textLines.push('');
   } else if (harmfulCount === 0) {
-    textLines.push(`✓ WIN TODAY: Zero harmful or impulsive purchases today (+saved vs avg daily pace).`);
+    textLines.push(`✓ SUKCES DZISIAJ: Zero impulsywnych zakupów i brak nowego długu dzisiaj (+bufor ochroniony).`);
     textLines.push('');
   }
 
   // Today's harmful transactions & elimination plan
-  textLines.push(`TODAY'S TRANSACTIONS (${analysis.todayTransactions.length} total, ${analysis.totalSpentTodayPln.toFixed(2)} PLN spent):`);
+  textLines.push(`DZISIEJSZE TRANSAKCJE (${analysis.todayTransactions.length} łącznie, ${analysis.totalSpentTodayPln.toFixed(2)} PLN wydane):`);
   if (analysis.internalTransfersExcluded.length > 0) {
-    textLines.push(`• Note: ${analysis.internalTransfersExcluded.length} internal transfer(s) (${analysis.internalTransfersExcluded.reduce((a, b) => a + b.amount, 0).toFixed(2)} PLN) excluded.`);
+    const totalExcluded = analysis.internalTransfersExcluded.reduce((a, b) => a + b.amount, 0);
+    textLines.push(`• Uwaga: ${analysis.internalTransfersExcluded.length} przelew(y) wewnętrzne (${totalExcluded.toFixed(2)} PLN) wykluczone z wydatków.`);
   }
 
   if (harmfulCount > 0) {
-    textLines.push(`⚠️ HARMFUL TO PLAN (${harmfulCount}):`);
+    textLines.push(`⚠️ SZKODLIWE DLA PLANU (${harmfulCount}):`);
     for (const h of analysis.harmfulTransactions) {
       textLines.push(`  - ${h.transaction.merchant} (${Math.abs(h.transaction.amount).toFixed(2)} ${h.transaction.currency}): ${h.reason}`);
-      textLines.push(`    -> Fix (${h.timeEstimate}): ${h.countermeasure}`);
+      textLines.push(`    -> Rozwiązanie (${h.timeEstimate}): ${h.countermeasure}`);
     }
   } else {
-    textLines.push(`• No harmful impulse transactions detected today.`);
+    textLines.push(`• Brak impulsywnych ani szkodliwych transakcji dzisiaj.`);
   }
   textLines.push('');
 
   // Next week's expected expenses & optimization
-  textLines.push(`NEXT 7 DAYS EXPECTED EXPENSES (Total: ~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN):`);
+  textLines.push(`PROGNOZA NA NAJBLIŻSZE 7 DNI (Suma: ~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN):`);
   if (analysis.upcomingExpenses.length > 0) {
     for (const exp of analysis.upcomingExpenses) {
       textLines.push(`• ${exp.expectedDate.slice(5)}: ${exp.name} — ${exp.amountPln.toFixed(2)} PLN (${exp.category})`);
     }
   } else {
-    textLines.push(`• No major subscription fees expected in the next 7 days.`);
+    textLines.push(`• Brak większych subskrypcji do zapłaty w najbliższych 7 dniach.`);
   }
-  textLines.push(`• Safe daily spend allowance: ${analysis.safeDailySpendPln.toFixed(0)} PLN/day.`);
-  textLines.push(`• Optimization tip: Consolidate grocery runs to 1-2 major discount store trips (Biedronka/Lidl) to avoid frequent convenience store markups.`);
+  textLines.push(`• Bezpieczny dzienny limit wydatków: ${analysis.safeDailySpendPln.toFixed(0)} PLN/dzień.`);
+  textLines.push(`• Wskazówka optymalizacyjna: Zrób 1-2 większe zakupy w dyskoncie (Biedronka/Lidl), aby uniknąć częstych i drogich zakupów w Żabkach.`);
   textLines.push('');
 
   // Numbered multi-step work (Rule 2: Number multi-step tasks, <= 3 steps)
-  textLines.push(`NEXT ACTIONS FOR TONIGHT:`);
+  textLines.push(`ZADANIA NA DZISIAJ WIECZÓR:`);
   textLines.push(`1. ${primaryAction}`);
-  textLines.push(`2. Check your calendar against next week's ${analysis.totalUpcomingWeekPln.toFixed(0)} PLN commitments (2 min)`);
+  textLines.push(`2. Sprawdź w kalendarzu zobowiązania na najbliższy tydzień (~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN) (2 min)`);
   textLines.push('');
 
   // End with ONE concrete next action (Rule 3)
-  textLines.push(`NEXT (2 min): Complete step 1 right now and close this email.`);
+  textLines.push(`DALEJ (2 min): Wykonaj krok 1 teraz i zamknij tego maila.`);
 
   const plainText = textLines.join('\n');
 
-  // --- High-Contrast Dark HTML Format (Mobile Friendly) ---
+  // --- High-Contrast Dark HTML Format (Mobile Friendly, in Polish) ---
   const html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="pl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -194,9 +216,9 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     .stat-row {
       display: flex;
       justify-content: space-between;
-      padding: 8px 0;
+      padding: 6px 0;
       border-bottom: 1px solid #334155;
-      font-size: 0.9rem;
+      font-size: 0.88rem;
     }
     .next-box {
       background: #090d16;
@@ -213,59 +235,82 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
 <body>
   <div class="card">
     <div class="action-banner">
-      <strong>⚡ Action Now (Do First)</strong>
+      <strong>⚡ Akcja Teraz (Zrób najpierw)</strong>
       <p>${primaryAction}</p>
     </div>
 
-    <div style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; margin-bottom: 16px;">
-      <div style="font-size: 0.8rem; color: #94a3b8;">CURRENT STATE</div>
-      <div style="font-weight: 700; font-size: 1.1rem; color: #f8fafc;">
-        Step ${currentStep.step_number} of 5: ${currentStep.title}
+    <div style="background: rgba(255,255,255,0.03); padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;">
+      <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;">STAN BUDŻETU</div>
+      <div style="font-weight: 700; font-size: 1.05rem; color: #f8fafc; margin-top: 2px;">
+        Krok ${currentStep.step_number} z 5: ${currentStep.title}
       </div>
-      <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 4px;">
-        Liquid: <strong>${analysis.liquidBalancePln.toFixed(2)} PLN</strong> | Clean Streak: <strong>${plan.habits_tracker.consecutive_days_without_harmful_spend}d</strong>
+      <div style="margin-top: 8px;">
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Dostępna gotówka (PLN):</span>
+          <strong style="color: #34d399;">${analysis.liquidBalancePln.toFixed(2)} PLN</strong>
+        </div>
+        ${foreignParts.length > 0 ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Waluty (oszczędności):</span>
+          <strong style="color: #38bdf8;">${foreignParts.join(', ')}</strong>
+        </div>
+        ` : ''}
+        ${analysis.creditDebtPln > 0 ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Zadłużenie (karty/limity):</span>
+          <strong style="color: #f87171;">-${analysis.creditDebtPln.toFixed(2)} PLN</strong>
+        </div>
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Bilans netto (PLN):</span>
+          <strong style="color: ${analysis.netBalancePln >= 0 ? '#34d399' : '#fca5a5'};">${analysis.netBalancePln.toFixed(2)} PLN</strong>
+        </div>
+        ` : ''}
+        <div class="stat-row" style="border-bottom: none;">
+          <span style="color: #94a3b8;">Czysta seria bez zbędnych zakupów:</span>
+          <strong style="color: #f8fafc;">${plan.habits_tracker.consecutive_days_without_harmful_spend} dni</strong>
+        </div>
       </div>
     </div>
 
     ${analysis.winMessage || harmfulCount === 0 ? `
       <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;">
-        <span class="badge badge-win">✓ Win Logged</span>
-        <div style="font-size: 0.95rem; color: #e2e8f0; margin-top: 4px;">
-          ${analysis.winMessage || 'Zero harmful or impulsive purchases today. Safe spending maintained!'}
+        <span class="badge badge-win">✓ Sukces dzisiaj</span>
+        <div style="font-size: 0.92rem; color: #e2e8f0; margin-top: 4px;">
+          ${analysis.winMessage || 'Zero impulsywnych zakupów i brak nowego długu. Twój bufor jest ochroniony!'}
         </div>
       </div>
     ` : ''}
 
-    <div class="section-title">Today's Transactions Review</div>
+    <div class="section-title">Przegląd dzisiejszych wydatków</div>
     ${harmfulCount > 0 ? `
       <div style="background: rgba(239, 68, 68, 0.1); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
-        <span class="badge badge-warn">Harmful to Plan (${harmfulCount})</span>
+        <span class="badge badge-warn">Szkodliwe dla planu (${harmfulCount})</span>
         <ul style="margin-top: 8px; padding-left: 18px;">
           ${analysis.harmfulTransactions.map(h => `
             <li>
               <strong>${h.transaction.merchant}</strong> (${Math.abs(h.transaction.amount).toFixed(2)} ${h.transaction.currency}): ${h.reason}
-              <br/><span style="color: #60a5fa;">&rarr; Fix (${h.timeEstimate}): ${h.countermeasure}</span>
+              <br/><span style="color: #60a5fa;">&rarr; Rozwiązanie (${h.timeEstimate}): ${h.countermeasure}</span>
             </li>
           `).join('')}
         </ul>
       </div>
     ` : `
-      <p style="font-size: 0.9rem; color: #34d399; margin: 0 0 12px 0;">✓ All purchases today were normal planned living expenses.</p>
+      <p style="font-size: 0.9rem; color: #34d399; margin: 0 0 12px 0;">✓ Wszystkie dzisiejsze transakcje były normalnymi, planowanymi wydatkami.</p>
     `}
 
-    <div class="section-title">Next 7 Days Forecast (~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN)</div>
+    <div class="section-title">Prognoza na 7 dni (~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN)</div>
     <ul>
       ${analysis.upcomingExpenses.slice(0, 5).map(e => `
         <li>${e.expectedDate.slice(5)}: <strong>${e.name}</strong> — ${e.amountPln.toFixed(2)} PLN (${e.category})</li>
       `).join('')}
-      <li>Daily living baseline + groceries: ~350–400 PLN</li>
+      <li>Stały koszt życia + zakupy spożywcze: ~350–400 PLN</li>
     </ul>
     <p style="font-size: 0.85rem; color: #94a3b8; margin: 6px 0 0 0;">
-      💡 <strong>Optimization:</strong> Batch grocery runs into 1-2 major supermarket stops to avoid daily convenience store leaks.
+      💡 <strong>Optymalizacja:</strong> Zrób 1-2 większe zakupy w dyskoncie (Biedronka/Lidl), aby uniknąć częstych i drogich zakupów w Żabkach.
     </p>
 
     <div class="next-box">
-      Next (2 min): Complete step 1 right now and close this email.
+      Dalej (2 min): Wykonaj krok 1 teraz i zamknij tego maila.
     </div>
   </div>
 </body>

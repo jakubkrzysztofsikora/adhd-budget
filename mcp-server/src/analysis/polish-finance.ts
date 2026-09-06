@@ -423,8 +423,8 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
     return {
       isHarmful: true,
       type: 'food_delivery',
-      reason: `Food delivery markup (+30-40% vs groceries/cooking). Drains daily spend buffer.`,
-      countermeasure: `Delete saved card from delivery app now so ordering has friction.`,
+      reason: `Wysoka marża dostawy jedzenia (+30-40% względem zakupów/gotowania). Wyczerpuje dzienny bufor.`,
+      countermeasure: `Usuń zapisaną kartę z aplikacji dostawczej, aby dodać tarcie przed zamówieniem.`,
       timeEstimate: `1 min`,
     };
   }
@@ -435,8 +435,8 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
     return {
       isHarmful: true,
       type: 'bnpl_deferred',
-      reason: `New deferred debt created with ${debt.provider}. Pushes expenses into next month and masks true balance.`,
-      countermeasure: `Turn off '${debt.provider}' as default payment method in checkout settings.`,
+      reason: `Nowy odroczony dług w ${debt.provider}. Przesuwa koszty na kolejny miesiąc i maskuje stan konta.`,
+      countermeasure: `Wyłącz '${debt.provider}' jako domyślną metodę w kasie sklepu.`,
       timeEstimate: `2 min`,
     };
   }
@@ -446,8 +446,8 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
     return {
       isHarmful: true,
       type: 'bank_fee',
-      reason: `Bank penalty or interest fee of ${absAmount.toFixed(2)} PLN. Pure leak with 0 value.`,
-      countermeasure: `Transfer minimum buffer into account or switch to fee-free ATM withdrawal mode.`,
+      reason: `Prowizja bankowa lub karne odsetki (${absAmount.toFixed(2)} PLN). Czysty wyciek bez żadnej wartości.`,
+      countermeasure: `Uzupełnij minimalne saldo na koncie lub zmień sposób wypłaty z bankomatów.`,
       timeEstimate: `2 min`,
     };
   }
@@ -458,8 +458,8 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
     return {
       isHarmful: true,
       type: 'impulse_shopping',
-      reason: `Large non-essential spend of ${absAmount.toFixed(2)} PLN at ${tx.merchant}.`,
-      countermeasure: `Implement the 24-hour rule: move non-essential items to a wishlist before buying.`,
+      reason: `Duży nieplanowany zakup (${absAmount.toFixed(2)} PLN) w ${tx.merchant}.`,
+      countermeasure: `Wprowadź regułę 24h: przenieś rzeczy do schowka/listy życzeń przed zakupem.`,
       timeEstimate: `1 min`,
     };
   }

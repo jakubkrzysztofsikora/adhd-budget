@@ -1,5 +1,5 @@
 import pino from 'pino';
-import { EnableBankingClient } from '../enable-banking/client.js';
+import { EnableBankingClient, EnableBankingBalance, EnableBankingTransaction } from '../enable-banking/client.js';
 import { SessionStore } from '../enable-banking/session-store.js';
 import {
   CleanTransaction,
@@ -54,28 +54,58 @@ export class DigestService {
     const allTodayTxs: CleanTransaction[] = [];
     const allPastTxs: CleanTransaction[] = [];
     let totalLiquidPln = 0;
+    let totalCreditDebtPln = 0;
+    const foreignBalances: Array<{ currency: string; amount: number }> = [];
 
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
-    // 1. Fetch Balances & Transactions from Enable Banking
+    // 1. Fetch Balances & Transactions from Enable Banking (with database cache fallback for PSD2 rate limits)
     if (this.ebClient) {
       for (const conn of connections) {
         for (const accountId of conn.account_uids) {
           // Balances
+          let balances: EnableBankingBalance[] | null = null;
           try {
-            const balances = await this.ebClient.getBalances(accountId);
-            for (const b of balances) {
-              if (b.balance_amount.currency === 'PLN') {
-                totalLiquidPln += parseFloat(b.balance_amount.amount);
-              }
-            }
+            balances = await this.ebClient.getBalances(accountId);
+            this.sessionStore.saveAccountBalances(accountId, balances);
           } catch (err) {
-            logger.warn({ accountId, err }, 'failed_to_fetch_balance_for_account');
+            logger.warn({ accountId, err }, 'failed_to_fetch_balance_from_bank_trying_cache');
+            balances = (this.sessionStore.getAccountBalances(accountId) as EnableBankingBalance[]) || null;
+          }
+
+          if (balances && balances.length > 0) {
+            // Deduplicate: pick the single primary balance for this account
+            // Priority: ITAV (Interim Available) > CLBD (Closing Booked) > ITBD (Interim Booked) > first
+            const primary = balances.find(b => b.balance_type === 'ITAV')
+              || balances.find(b => b.balance_type === 'CLBD')
+              || balances.find(b => b.balance_type === 'ITBD')
+              || balances[0];
+
+            const amt = parseFloat(primary.balance_amount.amount);
+            const curr = primary.balance_amount.currency;
+
+            if (curr === 'PLN') {
+              if (amt >= 0) {
+                totalLiquidPln += amt;
+              } else {
+                totalCreditDebtPln += Math.abs(amt);
+              }
+            } else {
+              foreignBalances.push({ currency: curr, amount: amt });
+            }
           }
 
           // Transactions
+          let rawTxs: EnableBankingTransaction[] | null = null;
           try {
-            const rawTxs = await this.ebClient.getTransactions(accountId, sixtyDaysAgo, todayStr);
+            rawTxs = await this.ebClient.getTransactions(accountId, sixtyDaysAgo, todayStr);
+            this.sessionStore.saveAccountTransactions(accountId, rawTxs);
+          } catch (err) {
+            logger.warn({ accountId, err }, 'failed_to_fetch_transactions_from_bank_trying_cache');
+            rawTxs = (this.sessionStore.getAccountTransactions(accountId) as EnableBankingTransaction[]) || null;
+          }
+
+          if (rawTxs) {
             for (const tx of rawTxs) {
               const rawAmount = parseFloat(tx.transaction_amount.amount);
               const desc = tx.remittance_information_unstructured || '';
@@ -104,8 +134,6 @@ export class DigestService {
                 allTodayTxs.push(cleanTx);
               }
             }
-          } catch (err) {
-            logger.warn({ accountId, err }, 'failed_to_fetch_transactions_for_account');
           }
         }
       }
@@ -158,7 +186,7 @@ export class DigestService {
       }
     }
 
-    // 3. Forecast next week's expected bills based on 60-day history
+    // 3. Forecast next week's expected bills based on history
     const detectedSubs = detectSubscriptions(allPastTxs);
     const now = new Date();
     const currentDayOfMonth = now.getDate();
@@ -166,14 +194,12 @@ export class DigestService {
     let expectedUpcomingWeekPln = 0;
 
     for (const sub of detectedSubs) {
-      // Parse sub day of month from last_date
       const subDate = new Date(sub.last_date);
       const subDay = subDate.getDate() || 1;
       
-      // Check if sub falls within next 7 days
       let daysUntil = subDay - currentDayOfMonth;
       if (daysUntil < 0) {
-        daysUntil += 30; // wraps into next month
+        daysUntil += 30;
       }
 
       if (daysUntil >= 0 && daysUntil <= 7) {
@@ -189,11 +215,11 @@ export class DigestService {
       }
     }
 
-    // Add baseline grocery / daily living estimate (~350 PLN/week)
+    // Baseline grocery / daily living estimate (~350 PLN/week)
     const baselineGroceries = 350;
     expectedUpcomingWeekPln += baselineGroceries;
 
-    // 4. Calculate safe daily spend
+    // 4. Calculate safe daily spend based on positive liquid cash
     const cashflow = calculateCashflowForecast(totalLiquidPln, totalSpentTodayPln, detectedSubs, currentDayOfMonth, 30);
     const safeDailySpendPln = cashflow.safe_daily_spend_limit_pln;
 
@@ -215,10 +241,10 @@ export class DigestService {
         const repSum = repaymentsToday.reduce((sum, d) => sum + Math.abs(d.transaction.amount), 0);
         state.debt_tracker.total_debt_repayments_logged_pln += repSum;
         state.debt_tracker.last_repayment_date = todayStr;
-        winMessage = `Debt payoff logged! Paid ${repSum.toFixed(2)} PLN towards deferred debt today.`;
+        winMessage = `Zarejestrowano spłatę długu! Wpłacono ${repSum.toFixed(2)} PLN na poczet odroczonych zobowiązań.`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       } else if (isHarmfulFree && allTodayTxs.length > 0) {
-        winMessage = `Zero harmful or deferred-debt transactions today. Safe buffer protected!`;
+        winMessage = `Zero impulsywnych zakupów i brak nowego długu dzisiaj. Bezpieczny bufor ochroniony!`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       }
 
@@ -228,13 +254,13 @@ export class DigestService {
         state.steps[0].status = 'completed';
         state.steps[0].completed_at = todayStr;
         state.current_step = 2;
-        winMessage = `MILESTONE UNLOCKED: Step 1 Complete! 7 days free of new BNPL. Starting Step 2 (1,000 PLN Buffer).`;
+        winMessage = `SUKCES ETAPU: Krok 1 zakończony! 7 dni bez nowego długu BNPL. Rozpoczynamy Krok 2 (Bufor 1 000 PLN).`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       } else if (state.current_step === 2 && totalLiquidPln >= 1000) {
         state.steps[1].status = 'completed';
         state.steps[1].completed_at = todayStr;
         state.current_step = 3;
-        winMessage = `MILESTONE UNLOCKED: Step 2 Complete! 1,000 PLN buffer reached. Advancing to Step 3 (Debt Snowball).`;
+        winMessage = `SUKCES ETAPU: Krok 2 zakończony! Zgromadzono bufor 1 000 PLN. Przechodzimy do Kroku 3 (Kula Śnieżna).`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       }
 
@@ -247,7 +273,7 @@ export class DigestService {
         step_number: state.current_step,
         harmful_count: harmfulTransactions.length,
         total_spent_today_pln: totalSpentTodayPln,
-        summary: winMessage || `${harmfulTransactions.length} leaks, ${totalSpentTodayPln.toFixed(0)} PLN spent`,
+        summary: winMessage || `${harmfulTransactions.length} wycieków, ${totalSpentTodayPln.toFixed(0)} PLN wydatków`,
       });
 
       return state;
@@ -264,7 +290,10 @@ export class DigestService {
       upcomingExpenses: upcomingExpenses.sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)),
       totalUpcomingWeekPln: expectedUpcomingWeekPln,
       safeDailySpendPln,
-      liquidBalancePln: totalLiquidPln,
+      liquidBalancePln: Math.round(totalLiquidPln * 100) / 100,
+      creditDebtPln: Math.round(totalCreditDebtPln * 100) / 100,
+      netBalancePln: Math.round((totalLiquidPln - totalCreditDebtPln) * 100) / 100,
+      foreignBalances,
       winMessage,
     };
 

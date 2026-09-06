@@ -29,12 +29,12 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
   });
 
   describe('ImprovementPlanStore', () => {
-    it('initializes with default 5-step roadmap and zero streaks', () => {
+    it('initializes with default 5-step roadmap in Polish and zero streaks', () => {
       const state = planStore.getPlanState();
       expect(state.current_step).toBe(1);
       expect(state.steps).toHaveLength(5);
-      expect(state.steps[0].title).toContain('Freeze New BNPL');
-      expect(state.steps[1].title).toContain('1,000 PLN');
+      expect(state.steps[0].title).toContain('Zamrożenie nowego długu BNPL');
+      expect(state.steps[1].title).toContain('1 000 PLN');
       expect(state.habits_tracker.consecutive_days_without_harmful_spend).toBe(0);
       expect(state.debt_tracker.total_debt_repayments_logged_pln).toBe(0);
     });
@@ -55,8 +55,8 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
     });
   });
 
-  describe('ADHD Formatter (i-have-adhd Rules Compliance)', () => {
-    it('formats email strictly following i-have-adhd rules', () => {
+  describe('ADHD Formatter (i-have-adhd Rules Compliance in Polish)', () => {
+    it('formats email strictly following i-have-adhd rules in Polish', () => {
       const mockAnalysis: DigestAnalysisResult = {
         date: '2026-09-06',
         todayTransactions: [
@@ -91,8 +91,8 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
               is_internal_transfer: false,
               is_income: false,
             },
-            reason: 'Food delivery markup (+30-40% vs groceries/cooking). Drains daily spend buffer.',
-            countermeasure: 'Delete saved card from delivery app now so ordering has friction.',
+            reason: 'Wysoka marża dostawy jedzenia (+30-40% względem zakupów/gotowania). Wyczerpuje dzienny bufor.',
+            countermeasure: 'Usuń zapisaną kartę z aplikacji dostawczej, aby dodać tarcie przed zamówieniem.',
             timeEstimate: '1 min',
           },
         ],
@@ -109,42 +109,48 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
         totalUpcomingWeekPln: 399.00,
         safeDailySpendPln: 85.00,
         liquidBalancePln: 3250.00,
-        winMessage: 'Zero BNPL orders created today (+streak preserved).',
+        creditDebtPln: 500.00,
+        netBalancePln: 2750.00,
+        foreignBalances: [{ currency: 'CHF', amount: 3000.00 }],
+        winMessage: 'Zero zamówień na raty dzisiaj (+seria zachowana).',
       };
 
       const planState = planStore.getPlanState();
       const formatted = formatAdhdDigest(mockAnalysis, planState);
 
-      // Rule 1: Lead with the next action (first line is ACTION NOW)
-      expect(formatted.text.startsWith('ACTION NOW: Delete saved card from delivery app now so ordering has friction. (1 min)')).toBe(true);
+      // Rule 1: Lead with the next action (first line is AKCJA TERAZ)
+      expect(formatted.text.startsWith('AKCJA TERAZ: Usuń zapisaną kartę z aplikacji dostawczej, aby dodać tarcie przed zamówieniem. (1 min)')).toBe(true);
 
       // Rule 5: Restate state every turn
-      expect(formatted.text).toContain('STATE: Step 1 of 5: Freeze New BNPL & Pay-Later Debt');
-      expect(formatted.text).toContain('Liquid Balance: 3250.00 PLN');
+      expect(formatted.text).toContain('STAN: Krok 1 z 5: Zamrożenie nowego długu BNPL');
+      expect(formatted.text).toContain('Dostępna gotówka (PLN): 3250.00 PLN');
+      expect(formatted.text).toContain('Zadłużenie na kartach/limitach: 500.00 PLN');
+      expect(formatted.text).toContain('Bilans netto (PLN): 2750.00 PLN');
+      expect(formatted.text).toContain('Oszczędności walutowe: 3000.00 CHF');
 
       // Rule 7: Make wins visible
-      expect(formatted.text).toContain('✓ WIN TODAY: Zero BNPL orders created today');
+      expect(formatted.text).toContain('✓ SUKCES DZISIAJ: Zero zamówień na raty dzisiaj');
 
       // Harmful transaction identified with actionable fix
-      expect(formatted.text).toContain('Pyszne.pl (65.50 PLN): Food delivery markup');
-      expect(formatted.text).toContain('-> Fix (1 min): Delete saved card from delivery app');
+      expect(formatted.text).toContain('Pyszne.pl (65.50 PLN): Wysoka marża');
+      expect(formatted.text).toContain('-> Rozwiązanie (1 min): Usuń zapisaną kartę z aplikacji dostawczej');
 
       // Next week forecast included
-      expect(formatted.text).toContain('NEXT 7 DAYS EXPECTED EXPENSES');
+      expect(formatted.text).toContain('PROGNOZA NA NAJBLIŻSZE 7 DNI');
       expect(formatted.text).toContain('Netflix — 49.00 PLN');
-      expect(formatted.text).toContain('Safe daily spend allowance: 85 PLN/day.');
+      expect(formatted.text).toContain('Bezpieczny dzienny limit wydatków: 85 PLN/dzień.');
 
       // Rule 2: Number multi-step work (<= 3 steps)
-      expect(formatted.text).toContain('NEXT ACTIONS FOR TONIGHT:');
-      expect(formatted.text).toContain('1. Delete saved card');
-      expect(formatted.text).toContain('2. Check your calendar');
+      expect(formatted.text).toContain('ZADANIA NA DZISIAJ WIECZÓR:');
+      expect(formatted.text).toContain('1. Usuń zapisaną kartę');
+      expect(formatted.text).toContain('2. Sprawdź w kalendarzu');
 
       // Rule 3: End with ONE concrete next action under 2 minutes
-      expect(formatted.text).toContain('NEXT (2 min): Complete step 1 right now and close this email.');
+      expect(formatted.text).toContain('DALEJ (2 min): Wykonaj krok 1 teraz i zamknij tego maila.');
 
-      // HTML version rendered
-      expect(formatted.html).toContain('⚡ Action Now (Do First)');
-      expect(formatted.html).toContain('Delete saved card');
+      // HTML version rendered in Polish
+      expect(formatted.html).toContain('⚡ Akcja Teraz (Zrób najpierw)');
+      expect(formatted.html).toContain('Usuń zapisaną kartę');
     });
   });
 
@@ -163,7 +169,10 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
       });
 
       const mockBalances: Record<string, EnableBankingBalance[]> = {
-        'acc-pko': [{ balance_amount: { amount: '4500.00', currency: 'PLN' }, balance_type: 'CLBD' }],
+        'acc-pko': [
+          { balance_amount: { amount: '4500.00', currency: 'PLN' }, balance_type: 'ITAV' },
+          { balance_amount: { amount: '4500.00', currency: 'PLN' }, balance_type: 'ITBD' },
+        ],
       };
 
       const mockTxs: Record<string, EnableBankingTransaction[]> = {
@@ -224,6 +233,9 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
       // Debt repayment recorded
       expect(result.analysis.debtTransactions).toHaveLength(1);
       expect(result.analysis.debtTransactions[0].type).toBe('bnpl_installment');
+
+      // Balances deduplicated: primary ITAV taken once (4500, not 9000)
+      expect(result.analysis.liquidBalancePln).toBe(4500);
 
       // Email recorded in memory
       expect(emailSender.sentEmails).toHaveLength(1);
