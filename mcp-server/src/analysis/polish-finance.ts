@@ -80,6 +80,7 @@ const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }
   { regex: /jakdojade/i, name: 'Jakdojade', category: 'Transport & Fuel' },
   { regex: /ztm|mpk|koleje|pkp\s+intercity/i, name: 'Public Transit', category: 'Transport & Fuel' },
   { regex: /autodirect|autopay/i, name: 'Autopay', category: 'Transport & Fuel' },
+  { regex: /traficar/i, name: 'Traficar', category: 'Transport & Fuel' },
 
   // E-commerce & Shopping
   { regex: /allegro/i, name: 'Allegro', category: 'Shopping' },
@@ -116,6 +117,7 @@ const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }
   { regex: /playstation|sony/i, name: 'PlayStation', category: 'Entertainment' },
   { regex: /chatgpt|openai/i, name: 'OpenAI', category: 'Subscriptions' },
   { regex: /anthropic|claude/i, name: 'Anthropic', category: 'Subscriptions' },
+  { regex: /microsoft/i, name: 'Microsoft', category: 'Subscriptions' },
   { regex: /gym|fitness|calypso|zdrofit|mcfit/i, name: 'Gym / Fitness', category: 'Subscriptions' },
 
   // BNPL & Pay Later / Debt
@@ -465,4 +467,58 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
   }
 
   return { isHarmful: false, type: 'none', reason: '', countermeasure: '', timeEstimate: '' };
+}
+
+export function parseEnableBankingTransaction(
+  tx: any,
+  bankName: string,
+  accountId: string,
+  ownerName: string,
+  fallbackDate: string,
+): CleanTransaction {
+  const rawAmountVal = parseFloat(tx.transaction_amount?.amount || '0');
+  const indicator = tx.credit_debit_indicator;
+
+  // In Open Banking (ISO 20022), DBIT = Debit (money spent, negative), CRDT = Credit (money received, positive)
+  let amount = rawAmountVal;
+  if (indicator === 'DBIT') {
+    amount = -Math.abs(rawAmountVal);
+  } else if (indicator === 'CRDT') {
+    amount = Math.abs(rawAmountVal);
+  }
+
+  const isIncome = indicator ? indicator === 'CRDT' : amount > 0;
+
+  // Extract merchant / creditor / debtor names
+  const creditorName = tx.creditor?.name || tx.creditor_name || '';
+  const debtorName = tx.debtor?.name || tx.debtor_name || '';
+  let desc = '';
+  if (Array.isArray(tx.remittance_information) && tx.remittance_information.length > 0) {
+    desc = tx.remittance_information.filter(Boolean).join(' ').trim();
+  } else if (tx.remittance_information_unstructured) {
+    desc = String(tx.remittance_information_unstructured).trim();
+  }
+
+  if (!desc) {
+    desc = isIncome ? debtorName || creditorName : creditorName || debtorName;
+  }
+
+  const norm = cleanMerchantAndCategory(desc, isIncome ? debtorName || creditorName : creditorName);
+  const isInternal = isInternalTransfer(desc, creditorName || debtorName);
+  const txDate = tx.booking_date || tx.value_date || fallbackDate;
+
+  return {
+    id: tx.entry_reference || tx.transaction_id || `${accountId}-${txDate}-${Math.abs(amount)}`,
+    bank: bankName,
+    account_id: accountId,
+    owner: ownerName,
+    date: txDate,
+    amount,
+    currency: tx.transaction_amount?.currency || 'PLN',
+    merchant: norm.merchant,
+    category: norm.category,
+    raw_description: desc,
+    is_internal_transfer: isInternal,
+    is_income: isIncome,
+  };
 }

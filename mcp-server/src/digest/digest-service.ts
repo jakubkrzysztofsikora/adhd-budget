@@ -3,12 +3,11 @@ import { EnableBankingClient, EnableBankingBalance, EnableBankingTransaction } f
 import { SessionStore } from '../enable-banking/session-store.js';
 import {
   CleanTransaction,
-  cleanMerchantAndCategory,
-  isInternalTransfer,
   detectSubscriptions,
   calculateCashflowForecast,
   classifyHarmfulTransaction,
   classifyDebtTransaction,
+  parseEnableBankingTransaction,
 } from '../analysis/polish-finance.js';
 import { ImprovementPlanStore } from './plan-store.js';
 import { formatAdhdDigest, ExpectedExpenseItem, DigestAnalysisResult, FormattedDigest } from './adhd-formatter.js';
@@ -107,30 +106,16 @@ export class DigestService {
 
           if (rawTxs) {
             for (const tx of rawTxs) {
-              const rawAmount = parseFloat(tx.transaction_amount.amount);
-              const desc = tx.remittance_information_unstructured || '';
-              const cred = tx.creditor_name || '';
-              const norm = cleanMerchantAndCategory(desc, cred);
-              const isInternal = isInternalTransfer(desc, cred);
-              const txDate = tx.booking_date || tx.value_date || todayStr;
-
-              const cleanTx: CleanTransaction = {
-                id: tx.entry_reference || tx.transaction_id || `${accountId}-${desc.slice(0, 10)}`,
-                bank: conn.aspsp_name,
-                account_id: accountId,
-                owner: conn.owner_name,
-                date: txDate,
-                amount: rawAmount,
-                currency: tx.transaction_amount.currency,
-                merchant: norm.merchant,
-                category: norm.category,
-                raw_description: desc,
-                is_internal_transfer: isInternal,
-                is_income: rawAmount > 0,
-              };
+              const cleanTx = parseEnableBankingTransaction(
+                tx,
+                conn.aspsp_name,
+                accountId,
+                conn.owner_name,
+                todayStr,
+              );
 
               allPastTxs.push(cleanTx);
-              if (txDate === todayStr) {
+              if (cleanTx.date === todayStr) {
                 allTodayTxs.push(cleanTx);
               }
             }
@@ -141,6 +126,7 @@ export class DigestService {
 
     // 2. Classify today's transactions
     let totalSpentTodayPln = 0;
+    let totalIncomeTodayPln = 0;
     const internalTransfersExcluded: Array<{ merchant: string; amount: number }> = [];
     const harmfulTransactions: Array<{
       transaction: CleanTransaction;
@@ -162,6 +148,8 @@ export class DigestService {
 
       if (tx.amount < 0) {
         totalSpentTodayPln += Math.abs(tx.amount);
+      } else if (tx.amount > 0) {
+        totalIncomeTodayPln += tx.amount;
       }
 
       // Check for BNPL & Debt
@@ -243,8 +231,11 @@ export class DigestService {
         state.debt_tracker.last_repayment_date = todayStr;
         winMessage = `Zarejestrowano spłatę długu! Wpłacono ${repSum.toFixed(2)} PLN na poczet odroczonych zobowiązań.`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
+      } else if (totalIncomeTodayPln > 0 && isHarmfulFree) {
+        winMessage = `Wpływ na konto (+${totalIncomeTodayPln.toFixed(2)} PLN) i brak szkodliwych wydatków dzisiaj!`;
+        state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       } else if (isHarmfulFree && allTodayTxs.length > 0) {
-        winMessage = `Zero impulsywnych zakupów i brak nowego długu dzisiaj. Bezpieczny bufor ochroniony!`;
+        winMessage = `Czysty dzień bez zakupów na raty ani impulsów. Bezpieczny bufor ochroniony!`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       }
 
@@ -283,7 +274,8 @@ export class DigestService {
     const analysis: DigestAnalysisResult = {
       date: todayStr,
       todayTransactions: allTodayTxs,
-      totalSpentTodayPln,
+      totalSpentTodayPln: Math.round(totalSpentTodayPln * 100) / 100,
+      totalIncomeTodayPln: Math.round(totalIncomeTodayPln * 100) / 100,
       internalTransfersExcluded,
       harmfulTransactions,
       debtTransactions,

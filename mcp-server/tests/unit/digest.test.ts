@@ -75,6 +75,7 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
           },
         ],
         totalSpentTodayPln: 65.50,
+        totalIncomeTodayPln: 0,
         internalTransfersExcluded: [],
         harmfulTransactions: [
           {

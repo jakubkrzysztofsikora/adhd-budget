@@ -8,6 +8,7 @@ import {
   analyzeSpending,
   detectSubscriptions,
   calculateCashflowForecast,
+  parseEnableBankingTransaction,
   type CleanTransaction,
 } from '../analysis/polish-finance.js';
 
@@ -153,6 +154,8 @@ function calculateDateRange(period: string): { dateFrom: string; dateTo: string;
 }
 
 export function registerTools(server: McpServer, ctx?: ToolContext): void {
+  const sessionStore = ctx?.getSessionStore?.();
+
   // ==========================================
   // High-Value ADHD Tools (Pareto 80/20)
   // ==========================================
@@ -316,28 +319,9 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       for (const target of targets) {
         try {
-          const rawTxs = await getCachedTransactions(client, target.accountId, dateFrom, dateTo);
+          const rawTxs = await getCachedTransactions(client, target.accountId, dateFrom, dateTo, sessionStore);
           for (const tx of rawTxs) {
-            const rawAmount = parseFloat(tx.transaction_amount.amount);
-            const desc = tx.remittance_information_unstructured || '';
-            const cred = tx.creditor_name || '';
-            const norm = cleanMerchantAndCategory(desc, cred);
-            const isInternal = isInternalTransfer(desc, cred);
-
-            allCleanTxs.push({
-              id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
-              bank: target.aspspName,
-              account_id: target.accountId,
-              owner: target.ownerName,
-              date: tx.booking_date || tx.value_date || dateTo,
-              amount: rawAmount,
-              currency: tx.transaction_amount.currency,
-              merchant: norm.merchant,
-              category: norm.category,
-              raw_description: desc,
-              is_internal_transfer: isInternal,
-              is_income: rawAmount > 0,
-            });
+            allCleanTxs.push(parseEnableBankingTransaction(tx, target.aspspName, target.accountId, target.ownerName, dateTo));
           }
         } catch (err) {
           // Log or skip single account error
@@ -372,33 +356,16 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       for (const target of targets) {
         try {
-          const rawTxs = await getCachedTransactions(client, target.accountId, date_from, date_to);
+          const rawTxs = await getCachedTransactions(client, target.accountId, date_from, date_to, sessionStore);
           for (const tx of rawTxs) {
-            const rawAmount = parseFloat(tx.transaction_amount.amount);
-            const desc = tx.remittance_information_unstructured || '';
-            const cred = tx.creditor_name || '';
-            const norm = cleanMerchantAndCategory(desc, cred);
+            const clean = parseEnableBankingTransaction(tx, target.aspspName, target.accountId, target.ownerName, date_to || '');
 
             if (lowerQuery) {
-              const textToSearch = `${norm.merchant} ${norm.category} ${desc} ${cred}`.toLowerCase();
+              const textToSearch = `${clean.merchant} ${clean.category} ${clean.raw_description}`.toLowerCase();
               if (!textToSearch.includes(lowerQuery)) continue;
             }
 
-            results.push({
-              id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
-              bank: target.aspspName,
-              account_id: target.accountId,
-              owner: target.ownerName,
-              date: tx.booking_date || tx.value_date || '',
-              amount: rawAmount,
-              currency: tx.transaction_amount.currency,
-              merchant: norm.merchant,
-              category: norm.category,
-              raw_description: desc,
-              is_internal_transfer: isInternalTransfer(desc, cred),
-              is_income: rawAmount > 0,
-            });
-
+            results.push(clean);
             if (results.length >= limit) break;
           }
         } catch (err) {
@@ -430,27 +397,9 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       for (const target of targets) {
         try {
-          const rawTxs = await getCachedTransactions(client, target.accountId, sixtyDaysAgo);
+          const rawTxs = await getCachedTransactions(client, target.accountId, sixtyDaysAgo, undefined, sessionStore);
           for (const tx of rawTxs) {
-            const rawAmount = parseFloat(tx.transaction_amount.amount);
-            const desc = tx.remittance_information_unstructured || '';
-            const cred = tx.creditor_name || '';
-            const norm = cleanMerchantAndCategory(desc, cred);
-
-            allTxs.push({
-              id: tx.entry_reference || tx.transaction_id || `${target.accountId}-${desc.slice(0, 10)}`,
-              bank: target.aspspName,
-              account_id: target.accountId,
-              owner: target.ownerName,
-              date: tx.booking_date || tx.value_date || '',
-              amount: rawAmount,
-              currency: tx.transaction_amount.currency,
-              merchant: norm.merchant,
-              category: norm.category,
-              raw_description: desc,
-              is_internal_transfer: isInternalTransfer(desc, cred),
-              is_income: rawAmount > 0,
-            });
+            allTxs.push(parseEnableBankingTransaction(tx, target.aspspName, target.accountId, target.ownerName, sixtyDaysAgo));
           }
         } catch (err) {
           // Ignore
@@ -478,15 +427,19 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       const targets = resolveAccountTargets(ctx, undefined, owner);
 
-      // 1. Get liquid balance
+      // 1. Get liquid balance (deduplicated primary positive balances)
       let totalLiquidPln = 0;
       for (const target of targets) {
         try {
-          const balances = await getCachedBalances(client, target.accountId);
-          for (const b of balances) {
-            if (b.balance_amount.currency === 'PLN') {
-              totalLiquidPln += parseFloat(b.balance_amount.amount);
-            }
+          const balances = await getCachedBalances(client, target.accountId, sessionStore);
+          const primary = balances.find(b => b.balance_type === 'ITAV')
+            || balances.find(b => b.balance_type === 'CLBD')
+            || balances.find(b => b.balance_type === 'ITBD')
+            || balances[0];
+
+          if (primary && primary.balance_amount.currency === 'PLN') {
+            const amt = parseFloat(primary.balance_amount.amount);
+            if (amt > 0) totalLiquidPln += amt;
           }
         } catch (err) {}
       }
@@ -499,31 +452,13 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       for (const target of targets) {
         try {
-          const rawTxs = await getCachedTransactions(client, target.accountId, firstOfMonth);
+          const rawTxs = await getCachedTransactions(client, target.accountId, firstOfMonth, undefined, sessionStore);
           for (const tx of rawTxs) {
-            const rawAmount = parseFloat(tx.transaction_amount.amount);
-            const desc = tx.remittance_information_unstructured || '';
-            const cred = tx.creditor_name || '';
-            const isInternal = isInternalTransfer(desc, cred);
-
-            if (!isInternal && rawAmount < 0) {
-              spentSoFar += Math.abs(rawAmount);
+            const clean = parseEnableBankingTransaction(tx, target.aspspName, target.accountId, target.ownerName, firstOfMonth);
+            if (!clean.is_internal_transfer && clean.amount < 0) {
+              spentSoFar += Math.abs(clean.amount);
             }
-
-            monthTxs.push({
-              id: tx.entry_reference || tx.transaction_id || '',
-              bank: target.aspspName,
-              account_id: target.accountId,
-              owner: target.ownerName,
-              date: tx.booking_date || '',
-              amount: rawAmount,
-              currency: tx.transaction_amount.currency,
-              merchant: cleanMerchantAndCategory(desc, cred).merchant,
-              category: cleanMerchantAndCategory(desc, cred).category,
-              raw_description: desc,
-              is_internal_transfer: isInternal,
-              is_income: rawAmount > 0,
-            });
+            monthTxs.push(clean);
           }
         } catch (err) {}
       }

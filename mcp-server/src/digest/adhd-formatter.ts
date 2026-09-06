@@ -13,6 +13,7 @@ export interface DigestAnalysisResult {
   date: string; // YYYY-MM-DD
   todayTransactions: CleanTransaction[];
   totalSpentTodayPln: number;
+  totalIncomeTodayPln: number;
   internalTransfersExcluded: Array<{ merchant: string; amount: number }>;
   harmfulTransactions: Array<{
     transaction: CleanTransaction;
@@ -101,21 +102,44 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     textLines.push('');
   }
 
-  // Today's harmful transactions & elimination plan
-  textLines.push(`DZISIEJSZE TRANSAKCJE (${analysis.todayTransactions.length} łącznie, ${analysis.totalSpentTodayPln.toFixed(2)} PLN wydane):`);
+  // Today's transactions review
+  const incomeSummary = analysis.totalIncomeTodayPln > 0 ? `, +${analysis.totalIncomeTodayPln.toFixed(2)} PLN wpływów` : '';
+  textLines.push(`DZISIEJSZE TRANSAKCJE (${analysis.todayTransactions.length} łącznie, ${analysis.totalSpentTodayPln.toFixed(2)} PLN wydatków${incomeSummary}):`);
+
+  // Incomes & Refunds
+  const incomes = analysis.todayTransactions.filter(t => t.is_income || t.amount > 0);
+  if (incomes.length > 0) {
+    textLines.push(`• Wpływy i zwroty (+${analysis.totalIncomeTodayPln.toFixed(2)} PLN):`);
+    for (const inc of incomes) {
+      textLines.push(`  + ${inc.merchant} (+${inc.amount.toFixed(2)} ${inc.currency})`);
+    }
+  }
+
   if (analysis.internalTransfersExcluded.length > 0) {
     const totalExcluded = analysis.internalTransfersExcluded.reduce((a, b) => a + b.amount, 0);
     textLines.push(`• Uwaga: ${analysis.internalTransfersExcluded.length} przelew(y) wewnętrzne (${totalExcluded.toFixed(2)} PLN) wykluczone z wydatków.`);
   }
 
+  // Harmful transactions
   if (harmfulCount > 0) {
     textLines.push(`⚠️ SZKODLIWE DLA PLANU (${harmfulCount}):`);
     for (const h of analysis.harmfulTransactions) {
       textLines.push(`  - ${h.transaction.merchant} (${Math.abs(h.transaction.amount).toFixed(2)} ${h.transaction.currency}): ${h.reason}`);
       textLines.push(`    -> Rozwiązanie (${h.timeEstimate}): ${h.countermeasure}`);
     }
-  } else {
-    textLines.push(`• Brak impulsywnych ani szkodliwych transakcji dzisiaj.`);
+  }
+
+  // Normal living expenses
+  const normalExpenses = analysis.todayTransactions.filter(
+    t => !t.is_income && t.amount < 0 && !t.is_internal_transfer && !analysis.harmfulTransactions.some(h => h.transaction.id === t.id)
+  );
+  if (normalExpenses.length > 0) {
+    textLines.push(`• Pozostałe normalne wydatki (${normalExpenses.length}):`);
+    for (const exp of normalExpenses) {
+      textLines.push(`  - ${exp.merchant} (${Math.abs(exp.amount).toFixed(2)} ${exp.currency}) [${exp.category}]`);
+    }
+  } else if (harmfulCount === 0 && incomes.length === 0) {
+    textLines.push(`• Brak wydatków ani transakcji dzisiaj.`);
   }
   textLines.push('');
 
@@ -196,6 +220,7 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     }
     .badge-win { background: rgba(16, 185, 129, 0.2); color: #34d399; }
     .badge-warn { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .badge-info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
     .section-title {
       font-size: 0.9rem;
       font-weight: 700;
@@ -281,7 +306,19 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
       </div>
     ` : ''}
 
-    <div class="section-title">Przegląd dzisiejszych wydatków</div>
+    <div class="section-title">Przegląd dzisiejszych transakcji</div>
+
+    ${incomes.length > 0 ? `
+      <div style="background: rgba(59, 130, 246, 0.1); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
+        <span class="badge badge-info">Wpływy i zwroty (+${analysis.totalIncomeTodayPln.toFixed(2)} PLN)</span>
+        <ul style="margin-top: 6px; padding-left: 18px;">
+          ${incomes.map(i => `
+            <li><strong>${i.merchant}</strong>: +${i.amount.toFixed(2)} ${i.currency}</li>
+          `).join('')}
+        </ul>
+      </div>
+    ` : ''}
+
     ${harmfulCount > 0 ? `
       <div style="background: rgba(239, 68, 68, 0.1); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
         <span class="badge badge-warn">Szkodliwe dla planu (${harmfulCount})</span>
@@ -294,9 +331,22 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
           `).join('')}
         </ul>
       </div>
-    ` : `
-      <p style="font-size: 0.9rem; color: #34d399; margin: 0 0 12px 0;">✓ Wszystkie dzisiejsze transakcje były normalnymi, planowanymi wydatkami.</p>
-    `}
+    ` : ''}
+
+    ${normalExpenses.length > 0 ? `
+      <div style="background: rgba(255, 255, 255, 0.03); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
+        <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px;">NORMALNE KOSZTY ŻYCIA (${normalExpenses.length}):</div>
+        <ul style="padding-left: 18px;">
+          ${normalExpenses.map(e => `
+            <li><strong>${e.merchant}</strong> (${Math.abs(e.amount).toFixed(2)} ${e.currency}) <span style="color: #64748b;">— ${e.category}</span></li>
+          `).join('')}
+        </ul>
+      </div>
+    ` : ''}
+
+    ${harmfulCount === 0 && normalExpenses.length === 0 && incomes.length === 0 ? `
+      <p style="font-size: 0.9rem; color: #34d399; margin: 0 0 12px 0;">✓ Brak transakcji dzisiaj.</p>
+    ` : ''}
 
     <div class="section-title">Prognoza na 7 dni (~${analysis.totalUpcomingWeekPln.toFixed(0)} PLN)</div>
     <ul>
