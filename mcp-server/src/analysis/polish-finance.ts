@@ -118,6 +118,15 @@ const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }
   { regex: /anthropic|claude/i, name: 'Anthropic', category: 'Subscriptions' },
   { regex: /gym|fitness|calypso|zdrofit|mcfit/i, name: 'Gym / Fitness', category: 'Subscriptions' },
 
+  // BNPL & Pay Later / Debt
+  { regex: /allegro\s*pay/i, name: 'Allegro Pay', category: 'BNPL / Pay Later' },
+  { regex: /paypo/i, name: 'PayPo', category: 'BNPL / Pay Later' },
+  { regex: /twisto/i, name: 'Twisto', category: 'BNPL / Pay Later' },
+  { regex: /klarna/i, name: 'Klarna', category: 'BNPL / Pay Later' },
+  { regex: /revolut\s*pay\s*later/i, name: 'Revolut Pay Later', category: 'BNPL / Pay Later' },
+  { regex: /spłata\s+karty|splata\s+karty/i, name: 'Credit Card Repayment', category: 'Debt Repayment' },
+  { regex: /odsetki|prowizja\s+bankowa/i, name: 'Bank Interest & Fees', category: 'Bank Fees' },
+
   // Telecom & Utilities
   { regex: /orange\s+polska/i, name: 'Orange', category: 'Utilities' },
   { regex: /play|p4\s+sp/i, name: 'Play', category: 'Utilities' },
@@ -361,4 +370,99 @@ export function calculateCashflowForecast(
     status,
     advice,
   };
+}
+
+export interface HarmfulTransactionAssessment {
+  isHarmful: boolean;
+  type: 'food_delivery' | 'bnpl_deferred' | 'impulse_shopping' | 'bank_fee' | 'none';
+  reason: string;
+  countermeasure: string;
+  timeEstimate: string;
+}
+
+export interface DebtTransactionAssessment {
+  isDebtRelated: boolean;
+  type: 'bnpl_new_debt' | 'bnpl_installment' | 'credit_card_repayment' | 'credit_card_charge' | 'none';
+  provider: string;
+}
+
+export function classifyDebtTransaction(tx: CleanTransaction): DebtTransactionAssessment {
+  const desc = `${tx.merchant} ${tx.raw_description}`.toLowerCase();
+
+  if (desc.includes('paypo')) {
+    const isRepayment = tx.amount < 0 && (desc.includes('spłata') || desc.includes('splata') || desc.includes('repayment') || desc.includes('przelew'));
+    return { isDebtRelated: true, type: isRepayment ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'PayPo' };
+  }
+  if (desc.includes('allegro pay')) {
+    const isRepayment = tx.amount < 0 && (desc.includes('spłata') || desc.includes('splata') || desc.includes('rata') || desc.includes('repayment'));
+    return { isDebtRelated: true, type: isRepayment ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Allegro Pay' };
+  }
+  if (desc.includes('twisto')) {
+    return { isDebtRelated: true, type: 'bnpl_new_debt', provider: 'Twisto' };
+  }
+  if (desc.includes('klarna')) {
+    return { isDebtRelated: true, type: 'bnpl_new_debt', provider: 'Klarna' };
+  }
+  if (desc.includes('spłata karty') || desc.includes('splata karty') || desc.includes('karta kredytowa')) {
+    return { isDebtRelated: true, type: 'credit_card_repayment', provider: 'Credit Card' };
+  }
+
+  return { isDebtRelated: false, type: 'none', provider: '' };
+}
+
+export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransactionAssessment {
+  if (tx.is_internal_transfer || tx.is_income || tx.amount >= 0) {
+    return { isHarmful: false, type: 'none', reason: '', countermeasure: '', timeEstimate: '' };
+  }
+
+  const desc = `${tx.merchant} ${tx.raw_description}`.toLowerCase();
+  const absAmount = Math.abs(tx.amount);
+
+  // 1. Food delivery apps (Pyszne.pl, Glovo, Wolt, Uber Eats, Bolt Food)
+  if (desc.includes('pyszne') || desc.includes('glovo') || desc.includes('wolt') || desc.includes('uber eats') || desc.includes('bolt food')) {
+    return {
+      isHarmful: true,
+      type: 'food_delivery',
+      reason: `Food delivery markup (+30-40% vs groceries/cooking). Drains daily spend buffer.`,
+      countermeasure: `Delete saved card from delivery app now so ordering has friction.`,
+      timeEstimate: `1 min`,
+    };
+  }
+
+  // 2. BNPL / Pay Later creation (accumulating deferred debt)
+  const debt = classifyDebtTransaction(tx);
+  if (debt.isDebtRelated && debt.type === 'bnpl_new_debt') {
+    return {
+      isHarmful: true,
+      type: 'bnpl_deferred',
+      reason: `New deferred debt created with ${debt.provider}. Pushes expenses into next month and masks true balance.`,
+      countermeasure: `Turn off '${debt.provider}' as default payment method in checkout settings.`,
+      timeEstimate: `2 min`,
+    };
+  }
+
+  // 3. Bank fees, overdraft interest, or cash advance fees
+  if (desc.includes('odsetki') || desc.includes('prowizja bankowa') || desc.includes('opłata za prowadzenie') || desc.includes('prowizja za wypłatę')) {
+    return {
+      isHarmful: true,
+      type: 'bank_fee',
+      reason: `Bank penalty or interest fee of ${absAmount.toFixed(2)} PLN. Pure leak with 0 value.`,
+      countermeasure: `Transfer minimum buffer into account or switch to fee-free ATM withdrawal mode.`,
+      timeEstimate: `2 min`,
+    };
+  }
+
+  // 4. Large impulse online shopping (non-grocery, non-utility, > 250 PLN)
+  const isEssentialCategory = ['Groceries', 'Utilities', 'Health & Beauty', 'Transport & Fuel'].includes(tx.category);
+  if (!isEssentialCategory && absAmount >= 250 && !debt.isDebtRelated) {
+    return {
+      isHarmful: true,
+      type: 'impulse_shopping',
+      reason: `Large non-essential spend of ${absAmount.toFixed(2)} PLN at ${tx.merchant}.`,
+      countermeasure: `Implement the 24-hour rule: move non-essential items to a wishlist before buying.`,
+      timeEstimate: `1 min`,
+    };
+  }
+
+  return { isHarmful: false, type: 'none', reason: '', countermeasure: '', timeEstimate: '' };
 }

@@ -14,12 +14,22 @@ import { registerTools, type ToolContext } from './tools/index.js';
 import { EnableBankingClient } from './enable-banking/client.js';
 import { EnableBankingOAuthProvider } from './auth/oauth-provider.js';
 import { SessionStore } from './enable-banking/session-store.js';
+import { ImprovementPlanStore } from './digest/plan-store.js';
+import { EmailSender } from './digest/email-sender.js';
+import { DigestService } from './digest/digest-service.js';
+import { DigestScheduler } from './digest/scheduler.js';
 
 const logger = createLogger();
 const config = getConfig();
 
-// Initialize session store
+// Initialize session store & plan store
 const sessionStore = new SessionStore(`${config.dataDir}/sessions.db`);
+const planStore = new ImprovementPlanStore(sessionStore.getDb());
+const emailSender = new EmailSender({
+  secretKey: config.scwSecretKey,
+  projectId: config.scwProjectId,
+  senderEmail: config.emailSender,
+});
 
 // Initialize Enable Banking client (if credentials available)
 let ebClient: EnableBankingClient | null = null;
@@ -42,6 +52,13 @@ if (config.enableAppId && config.enablePrivateKeyPath) {
   } catch (err) {
     logger.warn({ err }, 'Failed to initialize Enable Banking client — running without auth');
   }
+}
+
+// Initialize Daily Digest Service & Scheduler
+const digestService = new DigestService(sessionStore, planStore, emailSender, config, ebClient || undefined);
+const digestScheduler = new DigestScheduler(digestService, planStore, config.digestCronHour);
+if (process.env.NODE_ENV !== 'test') {
+  digestScheduler.start();
 }
 
 // Create Express app with DNS rebinding protection for loopback interfaces
@@ -610,6 +627,68 @@ app.delete('/mcp', authMiddleware, async (req, res) => {
     return;
   }
   await transports.get(sessionId)!.handleRequest(req, res);
+});
+
+// ==========================================
+// Daily Digest & Step-by-Step Plan Routes
+// ==========================================
+
+// Trigger daily digest (supports ?dry_run=true and ?date=YYYY-MM-DD)
+app.post('/cron/daily-digest', authMiddleware, async (req, res) => {
+  const dryRun = req.query.dry_run === 'true';
+  const forceDate = req.query.date as string | undefined;
+
+  try {
+    const result = await digestService.runDailyDigest({ dryRun, forceDate });
+    res.json({
+      status: 'ok',
+      dryRun,
+      subject: result.formatted.subject,
+      primaryAction: result.formatted.primaryAction,
+      emailResult: result.emailResult,
+      analysis: {
+        date: result.analysis.date,
+        totalSpentTodayPln: result.analysis.totalSpentTodayPln,
+        harmfulTransactionsCount: result.analysis.harmfulTransactions.length,
+        upcomingWeekEstimatedPln: result.analysis.totalUpcomingWeekPln,
+        liquidBalancePln: result.analysis.liquidBalancePln,
+      },
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: errMsg }, 'cron_daily_digest_failed');
+    res.status(500).json({ status: 'error', message: errMsg });
+  }
+});
+
+// Preview daily digest without sending (supports ?format=html and ?date=YYYY-MM-DD)
+app.get('/cron/daily-digest/preview', authMiddleware, async (req, res) => {
+  const forceDate = req.query.date as string | undefined;
+
+  try {
+    const result = await digestService.runDailyDigest({ dryRun: true, forceDate });
+    if (req.query.format === 'html') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(result.formatted.html);
+      return;
+    }
+
+    res.json({
+      subject: result.formatted.subject,
+      primaryAction: result.formatted.primaryAction,
+      text: result.formatted.text,
+      analysis: result.analysis,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ status: 'error', message: errMsg });
+  }
+});
+
+// Get current improvement plan memory state
+app.get('/cron/daily-digest/plan', authMiddleware, (_req, res) => {
+  const state = planStore.getPlanState();
+  res.json(state);
 });
 
 const port = config.port;

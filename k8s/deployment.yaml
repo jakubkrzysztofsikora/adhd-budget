@@ -80,6 +80,22 @@ spec:
                 secretKeyRef:
                   name: adhd-budget-secrets
                   key: MCP_TOKEN
+            - name: SCW_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adhd-budget-secrets
+                  key: SCW_SECRET_KEY
+            - name: SCW_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: adhd-budget-secrets
+                  key: SCW_PROJECT_ID
+            - name: EMAIL_SENDER
+              value: "budget@assistant.jakub.team"
+            - name: EMAIL_RECIPIENTS
+              value: "sikora@jakub.team, arletarynk@gmail.com"
+            - name: DIGEST_CRON_HOUR
+              value: "21"
           readinessProbe:
             httpGet:
               path: /health
@@ -105,3 +121,54 @@ spec:
         - name: keys
           secret:
             secretName: adhd-budget-keys
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: adhd-budget-daily-digest
+  namespace: adhd-budget
+spec:
+  # 19:00 UTC = 21:00 CEST (Warsaw summer time) / 20:00 CET (Warsaw winter time)
+  schedule: "0 19 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: forgejo-registry-cred
+          containers:
+            - name: trigger-digest
+              image: forgejo.tail5d39b4.ts.net/jakub/adhd-budget:latest
+              command:
+                - node
+                - -e
+                - |
+                  const token = process.env.MCP_TOKEN;
+                  console.log("Triggering daily digest on ADHD Budget service...");
+                  fetch("http://adhd-budget.adhd-budget.svc.cluster.local:8081/cron/daily-digest", {
+                    method: "POST",
+                    headers: {
+                      "Authorization": "Bearer " + token,
+                      "Content-Type": "application/json"
+                    }
+                  }).then(async res => {
+                    const text = await res.text();
+                    if (!res.ok) {
+                      console.error("Failed:", res.status, text);
+                      process.exit(1);
+                    }
+                    console.log("Success:", text);
+                  }).catch(err => {
+                    console.error("Network error:", err);
+                    process.exit(1);
+                  });
+              env:
+                - name: MCP_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: adhd-budget-secrets
+                      key: MCP_TOKEN

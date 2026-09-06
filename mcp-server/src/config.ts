@@ -29,6 +29,11 @@ export interface Config {
   mcpToken: string;
   oauthUsers: Map<string, string>;
   defaultUser: string;
+  scwSecretKey: string;
+  scwProjectId: string;
+  emailSender: string;
+  emailRecipients: string[];
+  digestCronHour: number;
 }
 
 import { existsSync } from 'node:fs';
@@ -104,6 +109,13 @@ export function getConfig(): Config {
     mcpToken,
     oauthUsers,
     defaultUser,
+    scwSecretKey: process.env.SCW_SECRET_KEY || process.env.TEM_SECRET_KEY || 'dc98daf7-3f48-4eea-b1b4-1fb837b2e10d',
+    scwProjectId: process.env.SCW_PROJECT_ID || '44a22077-f6f9-4904-8b9c-7371fe6a3bb9',
+    emailSender: process.env.EMAIL_SENDER || 'budget@assistant.jakub.team',
+    emailRecipients: process.env.EMAIL_RECIPIENTS
+      ? process.env.EMAIL_RECIPIENTS.split(',').map(s => s.trim())
+      : ['sikora@jakub.team', 'arletarynk@gmail.com'],
+    digestCronHour: parseInt(process.env.DIGEST_CRON_HOUR || '21', 10),
   };
 }
 

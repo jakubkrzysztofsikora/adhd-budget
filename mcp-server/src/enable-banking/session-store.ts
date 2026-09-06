@@ -251,6 +251,10 @@ export class SessionStore {
     return result.changes;
   }
 
+  getDb(): Database.Database {
+    return this.db;
+  }
+
   close(): void {
     this.db.close();
   }
