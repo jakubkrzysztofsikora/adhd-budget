@@ -25,6 +25,18 @@ export interface BankConnection {
   updated_at: number;
 }
 
+export interface ManualAccount {
+  id: string;
+  name: string;
+  type: 'savings_vault' | 'crypto' | 'investments' | 'physical_vault' | 'other';
+  balance: number;
+  currency: string;
+  owner_name: string;
+  institution?: string;
+  notes?: string;
+  updated_at: number;
+}
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
@@ -109,7 +121,101 @@ export class SessionStore {
         transactions_json TEXT,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS manual_accounts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        balance REAL NOT NULL,
+        currency TEXT NOT NULL,
+        owner_name TEXT NOT NULL DEFAULT 'Jakub',
+        institution TEXT,
+        notes TEXT,
+        updated_at INTEGER NOT NULL
+      );
     `);
+
+    // Seed default manual offline assets if empty
+    const countRow = this.db.prepare('SELECT count(*) as count FROM manual_accounts').get() as { count: number };
+    if (countRow.count === 0) {
+      const insertStmt = this.db.prepare(`
+        INSERT INTO manual_accounts (id, name, type, balance, currency, owner_name, institution, notes, updated_at)
+        VALUES (@id, @name, @type, @balance, @currency, @owner_name, @institution, @notes, @updated_at)
+      `);
+      const now = Date.now();
+      const seedAccounts: Array<ManualAccount> = [
+        {
+          id: 'rev-vault-pln',
+          name: 'Revolut Savings Vault (PLN)',
+          type: 'savings_vault',
+          balance: 43701,
+          currency: 'PLN',
+          owner_name: 'Jakub',
+          institution: 'Revolut',
+          notes: 'Sejf oszczędnościowy PLN',
+          updated_at: now,
+        },
+        {
+          id: 'rev-vault-eur',
+          name: 'Revolut Savings Vault (EUR)',
+          type: 'savings_vault',
+          balance: 8530,
+          currency: 'EUR',
+          owner_name: 'Jakub',
+          institution: 'Revolut',
+          notes: 'Sejf oszczędnościowy EUR',
+          updated_at: now,
+        },
+        {
+          id: 'crypto-btc',
+          name: 'Bitcoin (BTC)',
+          type: 'crypto',
+          balance: 0.069,
+          currency: 'BTC',
+          owner_name: 'Jakub',
+          institution: 'Crypto Wallet',
+          notes: 'Portfel krypto BTC',
+          updated_at: now,
+        },
+        {
+          id: 'crypto-eth',
+          name: 'Ethereum (ETH)',
+          type: 'crypto',
+          balance: 0.5,
+          currency: 'ETH',
+          owner_name: 'Jakub',
+          institution: 'Crypto Wallet',
+          notes: 'Portfel krypto ETH',
+          updated_at: now,
+        },
+        {
+          id: 'inv-xtb',
+          name: 'XTB Dom Maklerski',
+          type: 'investments',
+          balance: 11000,
+          currency: 'PLN',
+          owner_name: 'Jakub',
+          institution: 'XTB',
+          notes: 'Rachunek inwestycyjny (akcje / ETF)',
+          updated_at: now,
+        },
+        {
+          id: 'vault-home',
+          name: 'Sejf Domowy (Złoto i Srebro)',
+          type: 'physical_vault',
+          balance: 20000,
+          currency: 'PLN',
+          owner_name: 'Jakub',
+          institution: 'Fizyczny sejf domowy',
+          notes: 'Metale szlachetne (złoto i srebro)',
+          updated_at: now,
+        },
+      ];
+
+      for (const acc of seedAccounts) {
+        insertStmt.run(acc);
+      }
+    }
   }
 
   saveAccountBalances(accountId: string, balances: unknown[]): void {
@@ -302,6 +408,60 @@ export class SessionStore {
   cleanup(): number {
     const result = this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
     return result.changes;
+  }
+
+  getAllManualAccounts(ownerFilter?: string): ManualAccount[] {
+    let query = 'SELECT * FROM manual_accounts';
+    const params: string[] = [];
+    if (ownerFilter) {
+      query += ' WHERE LOWER(owner_name) = LOWER(?)';
+      params.push(ownerFilter);
+    }
+    query += ' ORDER BY type ASC, name ASC';
+    return this.db.prepare(query).all(...params) as ManualAccount[];
+  }
+
+  getManualAccount(id: string): ManualAccount | null {
+    return (this.db.prepare('SELECT * FROM manual_accounts WHERE id = ?').get(id) as ManualAccount) || null;
+  }
+
+  saveManualAccount(account: Omit<ManualAccount, 'updated_at'> & { updated_at?: number }): void {
+    const now = account.updated_at || Date.now();
+    this.db.prepare(`
+      INSERT INTO manual_accounts (id, name, type, balance, currency, owner_name, institution, notes, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        type = excluded.type,
+        balance = excluded.balance,
+        currency = excluded.currency,
+        owner_name = excluded.owner_name,
+        institution = excluded.institution,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `).run(
+      account.id,
+      account.name,
+      account.type,
+      account.balance,
+      account.currency.toUpperCase(),
+      account.owner_name || 'Jakub',
+      account.institution || '',
+      account.notes || '',
+      now,
+    );
+  }
+
+  updateManualAccountBalance(id: string, balance: number): void {
+    this.db.prepare(`
+      UPDATE manual_accounts
+      SET balance = ?, updated_at = ?
+      WHERE id = ?
+    `).run(balance, Date.now(), id);
+  }
+
+  deleteManualAccount(id: string): void {
+    this.db.prepare('DELETE FROM manual_accounts WHERE id = ?').run(id);
   }
 
   getDb(): Database.Database {

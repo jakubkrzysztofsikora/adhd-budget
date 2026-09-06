@@ -33,6 +33,14 @@ export interface DigestAnalysisResult {
   creditDebtPln: number;
   netBalancePln: number;
   foreignBalances?: Array<{ currency: string; amount: number }>;
+  manualAssets?: {
+    savingsVaultsPln: number;
+    savingsVaultsEur: number;
+    investmentsPln: number;
+    cryptoAssets: Array<{ currency: string; amount: number; name: string }>;
+    physicalVaultPln: number;
+    totalOfflineAssetsPln: number;
+  };
   winMessage?: string;
 }
 
@@ -78,8 +86,27 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
     '',
     `STAN: Krok ${currentStep.step_number} z 5: ${currentStep.title}`,
     `• Cel: ${currentStep.target_goal}`,
-    `• Dostępna gotówka (PLN): ${analysis.liquidBalancePln.toFixed(2)} PLN`,
+    `• Dostępna gotówka w ROR (PLN): ${analysis.liquidBalancePln.toFixed(2)} PLN`,
   ];
+
+  if (analysis.manualAssets) {
+    const ma = analysis.manualAssets;
+    const vaults: string[] = [];
+    if (ma.savingsVaultsPln > 0) vaults.push(`${ma.savingsVaultsPln.toLocaleString('pl-PL')} PLN`);
+    if (ma.savingsVaultsEur > 0) vaults.push(`${ma.savingsVaultsEur.toLocaleString('pl-PL')} EUR`);
+    if (vaults.length > 0) {
+      textLines.push(`• Sejfy oszczędnościowe: ${vaults.join(', ')}`);
+    }
+    if (ma.investmentsPln > 0) {
+      textLines.push(`• Inwestycje (XTB): ${ma.investmentsPln.toLocaleString('pl-PL')} PLN`);
+    }
+    if (ma.cryptoAssets && ma.cryptoAssets.length > 0) {
+      textLines.push(`• Krypto: ${ma.cryptoAssets.map(c => `${c.amount} ${c.currency}`).join(', ')}`);
+    }
+    if (ma.physicalVaultPln > 0) {
+      textLines.push(`• Sejf domowy (kruszce): ${ma.physicalVaultPln.toLocaleString('pl-PL')} PLN`);
+    }
+  }
 
   if (foreignLine) {
     textLines.push(foreignLine);
@@ -87,7 +114,7 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
 
   if (analysis.creditDebtPln > 0) {
     textLines.push(`• Zadłużenie na kartach/limitach: ${analysis.creditDebtPln.toFixed(2)} PLN`);
-    textLines.push(`• Bilans netto (PLN): ${analysis.netBalancePln.toFixed(2)} PLN`);
+    textLines.push(`• Bilans netto gotówki (ROR - dług): ${analysis.netBalancePln.toFixed(2)} PLN`);
   }
 
   textLines.push(`• Czysta seria: ${plan.habits_tracker.consecutive_days_without_harmful_spend} dni bez zbędnych wydatków`);
@@ -293,12 +320,39 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
       </div>
       <div style="margin-top: 8px;">
         <div class="stat-row">
-          <span style="color: #94a3b8;">Dostępna gotówka (PLN):</span>
+          <span style="color: #94a3b8;">Dostępna gotówka w ROR (PLN):</span>
           <strong style="color: #34d399;">${analysis.liquidBalancePln.toFixed(2)} PLN</strong>
         </div>
+        ${analysis.manualAssets && (analysis.manualAssets.savingsVaultsPln > 0 || analysis.manualAssets.savingsVaultsEur > 0) ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Sejfy oszczędnościowe:</span>
+          <strong style="color: #60a5fa;">${[
+            analysis.manualAssets.savingsVaultsPln > 0 ? `${analysis.manualAssets.savingsVaultsPln.toLocaleString('pl-PL')} PLN` : '',
+            analysis.manualAssets.savingsVaultsEur > 0 ? `${analysis.manualAssets.savingsVaultsEur.toLocaleString('pl-PL')} EUR` : ''
+          ].filter(Boolean).join(', ')}</strong>
+        </div>
+        ` : ''}
+        ${analysis.manualAssets && analysis.manualAssets.investmentsPln > 0 ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Inwestycje (XTB):</span>
+          <strong style="color: #c084fc;">${analysis.manualAssets.investmentsPln.toLocaleString('pl-PL')} PLN</strong>
+        </div>
+        ` : ''}
+        ${analysis.manualAssets && analysis.manualAssets.cryptoAssets && analysis.manualAssets.cryptoAssets.length > 0 ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Kryptowaluty:</span>
+          <strong style="color: #f59e0b;">${analysis.manualAssets.cryptoAssets.map(c => `${c.amount} ${c.currency}`).join(', ')}</strong>
+        </div>
+        ` : ''}
+        ${analysis.manualAssets && analysis.manualAssets.physicalVaultPln > 0 ? `
+        <div class="stat-row">
+          <span style="color: #94a3b8;">Sejf domowy (kruszce):</span>
+          <strong style="color: #34d399;">${analysis.manualAssets.physicalVaultPln.toLocaleString('pl-PL')} PLN</strong>
+        </div>
+        ` : ''}
         ${foreignParts.length > 0 ? `
         <div class="stat-row">
-          <span style="color: #94a3b8;">Waluty (oszczędności):</span>
+          <span style="color: #94a3b8;">Waluty w ROR (oszczędności):</span>
           <strong style="color: #38bdf8;">${foreignParts.join(', ')}</strong>
         </div>
         ` : ''}
@@ -308,7 +362,7 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
           <strong style="color: #f87171;">-${analysis.creditDebtPln.toFixed(2)} PLN</strong>
         </div>
         <div class="stat-row">
-          <span style="color: #94a3b8;">Bilans netto (PLN):</span>
+          <span style="color: #94a3b8;">Bilans netto gotówki (PLN):</span>
           <strong style="color: ${analysis.netBalancePln >= 0 ? '#34d399' : '#fca5a5'};">${analysis.netBalancePln.toFixed(2)} PLN</strong>
         </div>
         ` : ''}

@@ -92,6 +92,7 @@ app.get('/health', async (_req, res) => {
   }
 
   const connectedBanks = sessionStore.getAllBankConnections();
+  const manualAccounts = sessionStore.getAllManualAccounts();
 
   res.json({
     status: 'ok',
@@ -109,6 +110,14 @@ app.get('/health', async (_req, res) => {
       accounts: b.account_uids.length,
       valid_until: b.valid_until,
     })),
+    manual_accounts: manualAccounts.map(m => ({
+      id: m.id,
+      name: m.name,
+      type: m.type,
+      balance: m.balance,
+      currency: m.currency,
+      owner: m.owner_name,
+    })),
   });
 });
 
@@ -118,6 +127,7 @@ app.get('/health', async (_req, res) => {
 
 app.get('/connect', (req, res) => {
   const connected = sessionStore.getAllBankConnections();
+  const manualAccounts = sessionStore.getAllManualAccounts();
   const statusMsg = req.query.status as string | undefined;
   const bankParam = req.query.bank as string | undefined;
   const errorMsg = req.query.message as string | undefined;
@@ -231,7 +241,10 @@ app.get('/connect', (req, res) => {
 
     ${statusMsg === 'connected' ? `<div class="alert alert-success">✅ Successfully connected <strong>${bankParam || 'bank'}</strong>!</div>` : ''}
     ${statusMsg === 'disconnected' ? `<div class="alert alert-success">Disconnected <strong>${bankParam || 'bank'}</strong>.</div>` : ''}
-    ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error connecting bank: ${errorMsg || 'Authentication failed'}</div>` : ''}
+    ${statusMsg === 'manual_saved' ? `<div class="alert alert-success">✅ Zapisano aktywo: <strong>${bankParam || 'Aktywo'}</strong>!</div>` : ''}
+    ${statusMsg === 'manual_updated' ? `<div class="alert alert-success">✅ Zaktualizowano saldo dla: <strong>${bankParam || 'Aktywo'}</strong>!</div>` : ''}
+    ${statusMsg === 'manual_deleted' ? `<div class="alert alert-success">🗑️ Usunięto aktywo: <strong>${bankParam || 'Aktywo'}</strong>.</div>` : ''}
+    ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error: ${errorMsg || 'Operacja nie powiodła się'}</div>` : ''}
 
     <h2 style="font-size: 1.2rem; margin: 0 0 1rem 0;">Connected Bank Accounts</h2>
     <div class="card-list">
@@ -312,6 +325,103 @@ app.get('/connect', (req, res) => {
           style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
         <button type="submit" class="btn" style="white-space: nowrap;">Import Session</button>
+      </form>
+    </div>
+
+    <h2 style="font-size: 1.2rem; margin: 2rem 0 1rem 0;">💰 Offline & Manual Wealth Assets</h2>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
+      Track assets that cannot be synced automatically via Open Banking (Revolut Savings Vaults, Crypto Wallets, XTB Stocks, Physical Gold/Silver). Update their values here anytime:
+    </p>
+    <div class="card-list">
+      ${manualAccounts.length > 0 ? manualAccounts.map(acc => {
+        const typeLabels: Record<string, string> = {
+          savings_vault: '🏦 Sejf oszczędnościowy',
+          crypto: '🪙 Kryptowaluta',
+          investments: '📈 Inwestycje / XTB',
+          physical_vault: '🏆 Sejf domowy / Kruszce',
+          other: '📦 Inne aktywo'
+        };
+        const typeLabel = typeLabels[acc.type] || acc.type;
+        return `
+        <div class="bank-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+          <div class="bank-info" style="min-width: 240px;">
+            <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+              ${acc.name}
+              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${acc.owner_name}</span>
+            </h3>
+            <div class="meta" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+              <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">${typeLabel}</span>
+              ${acc.institution ? `<span style="color: var(--muted); font-size: 0.8rem;">(${acc.institution})</span>` : ''}
+              ${acc.notes ? `<span style="color: #64748b; font-size: 0.75rem; font-style: italic;">${acc.notes}</span>` : ''}
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <form action="/connect/manual-account/update" method="POST" style="display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+              <input type="hidden" name="id" value="${acc.id}" />
+              <input 
+                type="number" 
+                step="any" 
+                name="balance" 
+                value="${acc.balance}" 
+                required 
+                style="width: 120px; padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: #34d399; font-weight: bold; font-size: 0.9rem;"
+              />
+              <span style="font-weight: 600; font-size: 0.85rem; color: #94a3b8; min-width: 35px;">${acc.currency}</span>
+              <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;">Save</button>
+            </form>
+            <a href="/connect/manual-account/delete?id=${encodeURIComponent(acc.id)}" class="btn btn-danger" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" onclick="return confirm('Delete ${acc.name}?')">Delete</a>
+          </div>
+        </div>
+        `;
+      }).join('') : `
+        <div style="background: var(--card); border: 1px dashed var(--border); border-radius: 10px; padding: 1.5rem; text-align: center; color: var(--muted);">
+          No manual accounts added yet. Add one below!
+        </div>
+      `}
+    </div>
+
+    <div style="margin-bottom: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem;">
+      <h3 style="margin-top: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
+        <span>🪙</span> Add Manual / Offline Asset
+      </h3>
+      <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
+        Add assets that cannot be synced automatically via Open Banking:
+      </p>
+      <form action="/connect/manual-account" method="POST" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; align-items: end;">
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Asset Name</label>
+          <input type="text" name="name" placeholder="e.g. Revolut Vault PLN, Treasury Bonds" required style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Category</label>
+          <select name="type" required style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;">
+            <option value="savings_vault">Savings Vault (Sejf / Oszczędności)</option>
+            <option value="crypto">Crypto Wallet (Kryptowaluta)</option>
+            <option value="investments">Investments / Stocks (XTB, Makler)</option>
+            <option value="physical_vault">Physical Vault (Złoto / Srebro / Gotówka)</option>
+            <option value="other">Other Asset</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Balance / Amount</label>
+          <input type="number" step="any" name="balance" placeholder="0.00" required style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Currency</label>
+          <input type="text" name="currency" placeholder="PLN / EUR / BTC / ETH" value="PLN" required style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Owner</label>
+          <input type="text" name="owner_name" placeholder="e.g. Jakub, Arleta" value="Jakub" required style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem;">Institution / Location</label>
+          <input type="text" name="institution" placeholder="e.g. Revolut, XTB, Home Safe" style="width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+        </div>
+        <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem;">
+          <input type="text" name="notes" placeholder="Notes (optional, e.g. 0.069 BTC cold storage)" style="flex: 1; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;" />
+          <button type="submit" class="btn" style="white-space: nowrap;">+ Add Asset</button>
+        </div>
       </form>
     </div>
 
@@ -452,6 +562,65 @@ app.post('/connect/import-session', async (req, res) => {
     logger.error({ err: errMsg, sessionId }, 'session_import_failed');
     res.redirect(`/connect?status=error&message=${encodeURIComponent(`Import failed: ${errMsg}`)}`);
   }
+});
+
+// Manual & Offline Assets routes
+app.post('/connect/manual-account', (req, res) => {
+  const id = (req.body.id as string || '').trim() || `manual-${Date.now()}`;
+  const name = (req.body.name as string || '').trim();
+  const type = (req.body.type as 'savings_vault' | 'crypto' | 'investments' | 'physical_vault' | 'other') || 'savings_vault';
+  const balance = parseFloat(req.body.balance) || 0;
+  const currency = (req.body.currency as string || 'PLN').trim().toUpperCase();
+  const ownerName = (req.body.owner_name as string || 'Jakub').trim() || 'Jakub';
+  const institution = (req.body.institution as string || '').trim();
+  const notes = (req.body.notes as string || '').trim();
+
+  if (!name) {
+    res.redirect('/connect?status=error&message=Asset+name+is+required');
+    return;
+  }
+
+  sessionStore.saveManualAccount({
+    id,
+    name,
+    type,
+    balance,
+    currency,
+    owner_name: ownerName,
+    institution,
+    notes,
+  });
+
+  logger.info({ id, name, type, balance, currency, ownerName }, 'manual_account_saved');
+  res.redirect(`/connect?status=manual_saved&bank=${encodeURIComponent(name)}`);
+});
+
+app.post('/connect/manual-account/update', (req, res) => {
+  const id = (req.body.id as string || '').trim();
+  const balance = parseFloat(req.body.balance);
+
+  if (!id || isNaN(balance)) {
+    res.redirect('/connect?status=error&message=Invalid+balance+or+id');
+    return;
+  }
+
+  const existing = sessionStore.getManualAccount(id);
+  sessionStore.updateManualAccountBalance(id, balance);
+
+  logger.info({ id, balance, name: existing?.name }, 'manual_account_balance_updated');
+  res.redirect(`/connect?status=manual_updated&bank=${encodeURIComponent(existing?.name || id)}`);
+});
+
+app.get('/connect/manual-account/delete', (req, res) => {
+  const id = (req.query.id as string || '').trim();
+  if (id) {
+    const existing = sessionStore.getManualAccount(id);
+    sessionStore.deleteManualAccount(id);
+    logger.info({ id, name: existing?.name }, 'manual_account_deleted');
+    res.redirect(`/connect?status=manual_deleted&bank=${encodeURIComponent(existing?.name || id)}`);
+    return;
+  }
+  res.redirect('/connect');
 });
 
 

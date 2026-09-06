@@ -183,4 +183,62 @@ describe('SessionStore', () => {
     migratedStore.close();
     if (existsSync(legacyDbPath)) unlinkSync(legacyDbPath);
   });
+
+  it('manages manual and offline wealth accounts with initial seed data and CRUD operations', () => {
+    // Check seeded accounts
+    const initial = store.getAllManualAccounts();
+    expect(initial.length).toBeGreaterThanOrEqual(6);
+
+    const revPln = initial.find(a => a.id === 'rev-vault-pln');
+    expect(revPln).toBeDefined();
+    expect(revPln!.balance).toBe(43701);
+    expect(revPln!.currency).toBe('PLN');
+
+    const revEur = initial.find(a => a.id === 'rev-vault-eur');
+    expect(revEur).toBeDefined();
+    expect(revEur!.balance).toBe(8530);
+    expect(revEur!.currency).toBe('EUR');
+
+    const btc = initial.find(a => a.id === 'crypto-btc');
+    expect(btc).toBeDefined();
+    expect(btc!.balance).toBe(0.069);
+    expect(btc!.currency).toBe('BTC');
+
+    const eth = initial.find(a => a.id === 'crypto-eth');
+    expect(eth).toBeDefined();
+    expect(eth!.balance).toBe(0.5);
+
+    const xtb = initial.find(a => a.id === 'inv-xtb');
+    expect(xtb).toBeDefined();
+    expect(xtb!.balance).toBe(11000);
+
+    const vault = initial.find(a => a.id === 'vault-home');
+    expect(vault).toBeDefined();
+    expect(vault!.balance).toBe(20000);
+
+    // Update balance
+    store.updateManualAccountBalance('rev-vault-pln', 45000);
+    expect(store.getManualAccount('rev-vault-pln')!.balance).toBe(45000);
+
+    // Add new asset for Arleta
+    store.saveManualAccount({
+      id: 'arleta-savings',
+      name: 'Konto Oszczędnościowe',
+      type: 'savings_vault',
+      balance: 15000,
+      currency: 'PLN',
+      owner_name: 'Arleta',
+      institution: 'mBank',
+      notes: 'Oszczędności Arlety',
+    });
+
+    const arletaAccs = store.getAllManualAccounts('Arleta');
+    expect(arletaAccs).toHaveLength(1);
+    expect(arletaAccs[0].name).toBe('Konto Oszczędnościowe');
+    expect(arletaAccs[0].balance).toBe(15000);
+
+    // Delete asset
+    store.deleteManualAccount('arleta-savings');
+    expect(store.getManualAccount('arleta-savings')).toBeNull();
+  });
 });

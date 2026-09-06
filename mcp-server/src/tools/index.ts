@@ -267,11 +267,42 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       const totalEur = foreignTotals['EUR'] || 0;
 
+      // Manual & Offline Assets (Vaults, Crypto, Investments, Physical Vault)
+      const manualAccounts = sessionStore?.getAllManualAccounts(owner) || [];
+      const savingsVaultsPln = manualAccounts
+        .filter(m => m.type === 'savings_vault' && m.currency === 'PLN')
+        .reduce((sum, m) => sum + m.balance, 0);
+      const savingsVaultsEur = manualAccounts
+        .filter(m => m.type === 'savings_vault' && m.currency === 'EUR')
+        .reduce((sum, m) => sum + m.balance, 0);
+      const investmentsPln = manualAccounts
+        .filter(m => m.type === 'investments' && m.currency === 'PLN')
+        .reduce((sum, m) => sum + m.balance, 0);
+      const physicalVaultPln = manualAccounts
+        .filter(m => m.type === 'physical_vault' && m.currency === 'PLN')
+        .reduce((sum, m) => sum + m.balance, 0);
+      const cryptoAssets = manualAccounts
+        .filter(m => m.type === 'crypto')
+        .map(m => ({ currency: m.currency, amount: m.balance, name: m.name }));
+
+      const totalOfflineAssetsPln = savingsVaultsPln + investmentsPln + physicalVaultPln;
+
       const result = {
         total_liquid_pln: Math.round(totalLiquidPln * 100) / 100,
         total_liquid_eur: Math.round(totalEur * 100) / 100,
         total_credit_debt_pln: Math.round(totalCreditDebtPln * 100) / 100,
+        net_liquid_pln: Math.round((totalLiquidPln - totalCreditDebtPln) * 100) / 100,
         net_pln: Math.round((totalLiquidPln - totalCreditDebtPln) * 100) / 100,
+        manual_offline_assets: {
+          savings_vaults_pln: Math.round(savingsVaultsPln * 100) / 100,
+          savings_vaults_eur: Math.round(savingsVaultsEur * 100) / 100,
+          investments_pln: Math.round(investmentsPln * 100) / 100,
+          physical_vault_pln: Math.round(physicalVaultPln * 100) / 100,
+          crypto_assets: cryptoAssets,
+          accounts: manualAccounts,
+        },
+        total_savings_buffer_pln: Math.round((totalLiquidPln + savingsVaultsPln) * 100) / 100,
+        estimated_total_net_worth_pln: Math.round((totalLiquidPln + totalOfflineAssetsPln - totalCreditDebtPln) * 100) / 100,
         foreign_currencies: Object.entries(foreignTotals).map(([curr, amt]) => ({
           currency: curr,
           amount: Math.round(amt * 100) / 100,
@@ -493,11 +524,27 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
       try {
         if (sessionStore) {
           const conns = sessionStore.getAllBankConnections(owner);
-          const allAccounts = conns.flatMap(c =>
-            c.accounts_data.length > 0
-              ? c.accounts_data.map((acc: any) => ({ ...acc, bank: c.aspsp_name, owner: c.owner_name }))
-              : c.account_uids.map(u => ({ uid: u, bank: c.aspsp_name, owner: c.owner_name }))
-          );
+          const manualAccs = sessionStore.getAllManualAccounts(owner);
+
+          const allAccounts = [
+            ...conns.flatMap(c =>
+              c.accounts_data.length > 0
+                ? c.accounts_data.map((acc: any) => ({ ...acc, bank: c.aspsp_name, owner: c.owner_name, synced: true }))
+                : c.account_uids.map(u => ({ uid: u, bank: c.aspsp_name, owner: c.owner_name, synced: true }))
+            ),
+            ...manualAccs.map(m => ({
+              uid: m.id,
+              bank: m.institution || m.name,
+              owner: m.owner_name,
+              name: m.name,
+              type: m.type,
+              balance: m.balance,
+              currency: m.currency,
+              notes: m.notes,
+              synced: false,
+              is_manual: true,
+            })),
+          ];
           return { content: [{ type: 'text' as const, text: JSON.stringify({ accounts: allAccounts }, null, 2) }] };
         }
 

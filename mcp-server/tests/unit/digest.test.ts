@@ -124,9 +124,9 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
 
       // Rule 5: Restate state every turn
       expect(formatted.text).toContain('STAN: Krok 1 z 5: Zamrożenie nowego długu BNPL');
-      expect(formatted.text).toContain('Dostępna gotówka (PLN): 3250.00 PLN');
+      expect(formatted.text).toContain('Dostępna gotówka w ROR (PLN): 3250.00 PLN');
       expect(formatted.text).toContain('Zadłużenie na kartach/limitach: 500.00 PLN');
-      expect(formatted.text).toContain('Bilans netto (PLN): 2750.00 PLN');
+      expect(formatted.text).toContain('Bilans netto gotówki (ROR - dług): 2750.00 PLN');
       expect(formatted.text).toContain('Oszczędności walutowe: 3000.00 CHF');
 
       // Rule 7: Make wins visible

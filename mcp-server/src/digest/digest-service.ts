@@ -216,6 +216,25 @@ export class DigestService {
     const cashflow = calculateCashflowForecast(totalLiquidPln, totalSpentTodayPln, detectedSubs, currentDayOfMonth, 30);
     const safeDailySpendPln = cashflow.safe_daily_spend_limit_pln;
 
+    // Manual & Offline Assets (Revolut Vaults, Crypto, XTB, Physical Vault)
+    const manualAccounts = this.sessionStore.getAllManualAccounts();
+    const savingsVaultsPln = manualAccounts
+      .filter(m => m.type === 'savings_vault' && m.currency === 'PLN')
+      .reduce((sum, m) => sum + m.balance, 0);
+    const savingsVaultsEur = manualAccounts
+      .filter(m => m.type === 'savings_vault' && m.currency === 'EUR')
+      .reduce((sum, m) => sum + m.balance, 0);
+    const investmentsPln = manualAccounts
+      .filter(m => m.type === 'investments' && m.currency === 'PLN')
+      .reduce((sum, m) => sum + m.balance, 0);
+    const physicalVaultPln = manualAccounts
+      .filter(m => m.type === 'physical_vault' && m.currency === 'PLN')
+      .reduce((sum, m) => sum + m.balance, 0);
+    const cryptoAssets = manualAccounts
+      .filter(m => m.type === 'crypto')
+      .map(m => ({ currency: m.currency, amount: m.balance, name: m.name }));
+    const totalOfflineAssetsPln = savingsVaultsPln + investmentsPln + physicalVaultPln;
+
     // 5. Update Plan Memory in SQLite
     let winMessage = '';
     const updatedPlan = this.planStore.updatePlan(state => {
@@ -252,7 +271,7 @@ export class DigestService {
         state.current_step = 2;
         winMessage = `SUKCES ETAPU: Krok 1 zakończony! 7 dni bez nowego długu BNPL. Rozpoczynamy Krok 2 (Bufor 1 000 PLN).`;
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
-      } else if (state.current_step === 2 && totalLiquidPln >= 1000) {
+      } else if (state.current_step === 2 && (totalLiquidPln + savingsVaultsPln) >= 1000) {
         state.steps[1].status = 'completed';
         state.steps[1].completed_at = todayStr;
         state.current_step = 3;
@@ -260,7 +279,7 @@ export class DigestService {
         state.habits_tracker.logged_wins.push({ date: todayStr, win: winMessage });
       }
 
-      state.total_savings_buffer_pln = totalLiquidPln;
+      state.total_savings_buffer_pln = totalLiquidPln + savingsVaultsPln;
       state.last_digest_at = Date.now();
       state.last_digest_date = todayStr;
 
@@ -291,6 +310,14 @@ export class DigestService {
       creditDebtPln: Math.round(totalCreditDebtPln * 100) / 100,
       netBalancePln: Math.round((totalLiquidPln - totalCreditDebtPln) * 100) / 100,
       foreignBalances,
+      manualAssets: {
+        savingsVaultsPln: Math.round(savingsVaultsPln * 100) / 100,
+        savingsVaultsEur: Math.round(savingsVaultsEur * 100) / 100,
+        investmentsPln: Math.round(investmentsPln * 100) / 100,
+        physicalVaultPln: Math.round(physicalVaultPln * 100) / 100,
+        cryptoAssets,
+        totalOfflineAssetsPln: Math.round(totalOfflineAssetsPln * 100) / 100,
+      },
       winMessage,
     };
 
