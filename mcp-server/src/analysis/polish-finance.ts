@@ -68,6 +68,7 @@ const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }
   { regex: /stokrotka/i, name: 'Stokrotka', category: 'Groceries' },
   { regex: /netto/i, name: 'Netto', category: 'Groceries' },
   { regex: /frisco/i, name: 'Frisco', category: 'Groceries' },
+  { regex: /wolt/i, name: 'Wolt', category: 'Groceries' },
 
   // Fuel & Transport
   { regex: /orlen/i, name: 'Orlen', category: 'Transport & Fuel' },
@@ -100,7 +101,6 @@ const MERCHANT_PATTERNS: Array<{ regex: RegExp; name: string; category: string }
   // Dining & Food Delivery
   { regex: /pyszne\.pl|pyszne/i, name: 'Pyszne.pl', category: 'Dining' },
   { regex: /glovo/i, name: 'Glovo', category: 'Dining' },
-  { regex: /wolt/i, name: 'Wolt', category: 'Dining' },
   { regex: /uber\s*eats/i, name: 'Uber Eats', category: 'Dining' },
   { regex: /mcdonald/i, name: "McDonald's", category: 'Dining' },
   { regex: /kfc/i, name: 'KFC', category: 'Dining' },
@@ -452,12 +452,13 @@ export function classifyHarmfulTransaction(tx: CleanTransaction): HarmfulTransac
   const desc = `${tx.merchant} ${tx.raw_description}`.toLowerCase();
   const absAmount = Math.abs(tx.amount);
 
-  // 1. Food delivery apps (Pyszne.pl, Glovo, Wolt, Uber Eats, Bolt Food)
-  if (desc.includes('pyszne') || desc.includes('glovo') || desc.includes('wolt') || desc.includes('uber eats') || desc.includes('bolt food')) {
+  // 1. Food delivery apps (Pyszne.pl, Glovo takeaway, Uber Eats, Bolt Food)
+  // Note: Wolt is used for groceries with Wolt+ free delivery plan, so it is treated as Groceries.
+  if (desc.includes('pyszne') || desc.includes('uber eats') || desc.includes('bolt food')) {
     return {
       isHarmful: true,
       type: 'food_delivery',
-      reason: `Wysoka marża dostawy jedzenia (+30-40% względem zakupów/gotowania). Wyczerpuje dzienny bufor.`,
+      reason: `Wysoka marża dostawy jedzenia z restauracji (+30-40% względem gotowania). Wyczerpuje dzienny bufor.`,
       countermeasure: `Usuń zapisaną kartę z aplikacji dostawczej, aby dodać tarcie przed zamówieniem.`,
       timeEstimate: `1 min`,
     };
