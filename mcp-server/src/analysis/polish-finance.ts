@@ -11,6 +11,7 @@ export interface CleanTransaction {
   raw_description: string;
   is_internal_transfer: boolean;
   is_income: boolean;
+  is_credit_account?: boolean;
   is_outlier?: boolean;
   outlier_reason?: string;
 }
@@ -390,23 +391,54 @@ export interface DebtTransactionAssessment {
 
 export function classifyDebtTransaction(tx: CleanTransaction): DebtTransactionAssessment {
   const desc = `${tx.merchant} ${tx.raw_description}`.toLowerCase();
+  const isRepaymentKeyword =
+    desc.includes('spłata') ||
+    desc.includes('splata') ||
+    desc.includes('repayment') ||
+    desc.includes('rata') ||
+    desc.includes('spłata zadłużenia') ||
+    desc.includes('splata zadluzenia') ||
+    desc.includes('spłata kredytu') ||
+    desc.includes('splata kredytu');
 
+  // 1. Credit Card Repayments (transfer or payment to pay down card/credit line)
+  if (desc.includes('spłata karty') || desc.includes('splata karty') || (desc.includes('karta kredytowa') && isRepaymentKeyword)) {
+    return { isDebtRelated: true, type: 'credit_card_repayment', provider: 'Karta Kredytowa' };
+  }
+
+  // 2. PayPo (Buy vs Installment Repayment)
   if (desc.includes('paypo')) {
-    const isRepayment = tx.amount < 0 && (desc.includes('spłata') || desc.includes('splata') || desc.includes('repayment') || desc.includes('przelew'));
-    return { isDebtRelated: true, type: isRepayment ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'PayPo' };
+    return { isDebtRelated: true, type: isRepaymentKeyword ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'PayPo' };
   }
+
+  // 3. Allegro Pay (Buy vs Installment Repayment)
   if (desc.includes('allegro pay')) {
-    const isRepayment = tx.amount < 0 && (desc.includes('spłata') || desc.includes('splata') || desc.includes('rata') || desc.includes('repayment'));
-    return { isDebtRelated: true, type: isRepayment ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Allegro Pay' };
+    return { isDebtRelated: true, type: isRepaymentKeyword ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Allegro Pay' };
   }
+
+  // 4. Twisto
   if (desc.includes('twisto')) {
-    return { isDebtRelated: true, type: 'bnpl_new_debt', provider: 'Twisto' };
+    return { isDebtRelated: true, type: isRepaymentKeyword ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Twisto' };
   }
+
+  // 5. Klarna
   if (desc.includes('klarna')) {
-    return { isDebtRelated: true, type: 'bnpl_new_debt', provider: 'Klarna' };
+    return { isDebtRelated: true, type: isRepaymentKeyword ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Klarna' };
   }
-  if (desc.includes('spłata karty') || desc.includes('splata karty') || desc.includes('karta kredytowa')) {
-    return { isDebtRelated: true, type: 'credit_card_repayment', provider: 'Credit Card' };
+
+  // 6. Revolut Pay Later
+  if (desc.includes('revolut pay later')) {
+    return { isDebtRelated: true, type: isRepaymentKeyword ? 'bnpl_installment' : 'bnpl_new_debt', provider: 'Revolut Pay Later' };
+  }
+
+  // 7. Loan / credit installment transfer
+  if (isRepaymentKeyword && (desc.includes('kredyt') || desc.includes('pożyczka') || desc.includes('pozyczka'))) {
+    return { isDebtRelated: true, type: 'credit_card_repayment', provider: 'Kredyt / Pożyczka' };
+  }
+
+  // 8. Purchases made directly on a credit card / credit facility account
+  if (tx.is_credit_account && tx.amount < 0 && !tx.is_internal_transfer) {
+    return { isDebtRelated: true, type: 'credit_card_charge', provider: `${tx.bank} (Karta Kredytowa)` };
   }
 
   return { isDebtRelated: false, type: 'none', provider: '' };

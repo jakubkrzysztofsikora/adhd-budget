@@ -242,6 +242,7 @@ describe('Daily ADHD Digest Service & Plan Memory', () => {
       expect(emailSender.sentEmails).toHaveLength(1);
       expect(emailSender.sentEmails[0].to).toContain('sikora@jakub.team');
       expect(emailSender.sentEmails[0].to).toContain('arletarynk@gmail.com');
+      expect(emailSender.sentEmails[0].text).toContain('SPŁATY ZADŁUŻENIA');
 
       // Plan memory updated with debt repayment and clean streak
       const updatedPlan = planStore.getPlanState();

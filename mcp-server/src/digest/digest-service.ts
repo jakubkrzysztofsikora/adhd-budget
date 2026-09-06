@@ -60,6 +60,8 @@ export class DigestService {
 
     // 1. Fetch Balances & Transactions from Enable Banking (with database cache fallback for PSD2 rate limits)
     if (this.ebClient) {
+      const creditAccountIds = new Set<string>();
+
       for (const conn of connections) {
         for (const accountId of conn.account_uids) {
           // Balances
@@ -68,7 +70,7 @@ export class DigestService {
             balances = await this.ebClient.getBalances(accountId);
             this.sessionStore.saveAccountBalances(accountId, balances);
           } catch (err) {
-            logger.warn({ accountId, err }, 'failed_to_fetch_balance_from_bank_trying_cache');
+            logger.warn({ accountId, err }, 'failed_to_fetch_balances_from_bank_trying_cache');
             balances = (this.sessionStore.getAccountBalances(accountId) as EnableBankingBalance[]) || null;
           }
 
@@ -88,6 +90,7 @@ export class DigestService {
                 totalLiquidPln += amt;
               } else {
                 totalCreditDebtPln += Math.abs(amt);
+                creditAccountIds.add(accountId);
               }
             } else {
               foreignBalances.push({ currency: curr, amount: amt });
@@ -113,6 +116,7 @@ export class DigestService {
                 conn.owner_name,
                 todayStr,
               );
+              cleanTx.is_credit_account = creditAccountIds.has(accountId);
 
               allPastTxs.push(cleanTx);
               if (cleanTx.date === todayStr) {
@@ -141,6 +145,17 @@ export class DigestService {
     }> = [];
 
     for (const tx of allTodayTxs) {
+      // Check for BNPL & Debt & Repayments FIRST (even if an internal transfer, e.g. spłata karty)
+      const debtClass = classifyDebtTransaction(tx);
+      if (debtClass.isDebtRelated && debtClass.type !== 'none') {
+        debtTransactions.push({
+          transaction: tx,
+          type: debtClass.type,
+          provider: debtClass.provider,
+        });
+      }
+
+      // Internal transfers are excluded from consumption/burn spend
       if (tx.is_internal_transfer) {
         internalTransfersExcluded.push({ merchant: tx.merchant, amount: Math.abs(tx.amount) });
         continue;
@@ -150,16 +165,6 @@ export class DigestService {
         totalSpentTodayPln += Math.abs(tx.amount);
       } else if (tx.amount > 0) {
         totalIncomeTodayPln += tx.amount;
-      }
-
-      // Check for BNPL & Debt
-      const debtClass = classifyDebtTransaction(tx);
-      if (debtClass.isDebtRelated && debtClass.type !== 'none') {
-        debtTransactions.push({
-          transaction: tx,
-          type: debtClass.type,
-          provider: debtClass.provider,
-        });
       }
 
       // Check for Harmful / Impulse spending

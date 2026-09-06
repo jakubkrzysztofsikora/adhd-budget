@@ -106,8 +106,18 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
   const incomeSummary = analysis.totalIncomeTodayPln > 0 ? `, +${analysis.totalIncomeTodayPln.toFixed(2)} PLN wpływów` : '';
   textLines.push(`DZISIEJSZE TRANSAKCJE (${analysis.todayTransactions.length} łącznie, ${analysis.totalSpentTodayPln.toFixed(2)} PLN wydatków${incomeSummary}):`);
 
+  // Debt Repayments (wins!)
+  const repayments = analysis.debtTransactions.filter(d => d.type === 'bnpl_installment' || d.type === 'credit_card_repayment');
+  if (repayments.length > 0) {
+    const totalRepaid = repayments.reduce((s, d) => s + Math.abs(d.transaction.amount), 0);
+    textLines.push(`🎉 SPŁATY ZADŁUŻENIA (${repayments.length}, +${totalRepaid.toFixed(2)} PLN na zmniejszenie długu):`);
+    for (const rep of repayments) {
+      textLines.push(`  ✓ ${rep.transaction.merchant || rep.provider} (+${Math.abs(rep.transaction.amount).toFixed(2)} ${rep.transaction.currency}) — spłata długu / raty`);
+    }
+  }
+
   // Incomes & Refunds
-  const incomes = analysis.todayTransactions.filter(t => t.is_income || t.amount > 0);
+  const incomes = analysis.todayTransactions.filter(t => (t.is_income || t.amount > 0) && !repayments.some(r => r.transaction.id === t.id));
   if (incomes.length > 0) {
     textLines.push(`• Wpływy i zwroty (+${analysis.totalIncomeTodayPln.toFixed(2)} PLN):`);
     for (const inc of incomes) {
@@ -117,7 +127,7 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
 
   if (analysis.internalTransfersExcluded.length > 0) {
     const totalExcluded = analysis.internalTransfersExcluded.reduce((a, b) => a + b.amount, 0);
-    textLines.push(`• Uwaga: ${analysis.internalTransfersExcluded.length} przelew(y) wewnętrzne (${totalExcluded.toFixed(2)} PLN) wykluczone z wydatków.`);
+    textLines.push(`• Transfery wewnętrzne: ${analysis.internalTransfersExcluded.length} przelew(y) (${totalExcluded.toFixed(2)} PLN) wykluczone z wydatków konsumpcyjnych.`);
   }
 
   // Harmful transactions
@@ -136,9 +146,10 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
   if (normalExpenses.length > 0) {
     textLines.push(`• Pozostałe normalne wydatki (${normalExpenses.length}):`);
     for (const exp of normalExpenses) {
-      textLines.push(`  - ${exp.merchant} (${Math.abs(exp.amount).toFixed(2)} ${exp.currency}) [${exp.category}]`);
+      const creditTag = exp.is_credit_account ? ' [Karta kredytowa]' : '';
+      textLines.push(`  - ${exp.merchant} (${Math.abs(exp.amount).toFixed(2)} ${exp.currency}) [${exp.category}]${creditTag}`);
     }
-  } else if (harmfulCount === 0 && incomes.length === 0) {
+  } else if (harmfulCount === 0 && incomes.length === 0 && repayments.length === 0) {
     textLines.push(`• Brak wydatków ani transakcji dzisiaj.`);
   }
   textLines.push('');
@@ -308,6 +319,17 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
 
     <div class="section-title">Przegląd dzisiejszych transakcji</div>
 
+    ${repayments.length > 0 ? `
+      <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
+        <span class="badge badge-win">🎉 Spłaty zadłużenia (${repayments.length})</span>
+        <ul style="margin-top: 6px; padding-left: 18px;">
+          ${repayments.map(r => `
+            <li><strong>${r.transaction.merchant || r.provider}</strong>: spłacono +${Math.abs(r.transaction.amount).toFixed(2)} ${r.transaction.currency}</li>
+          `).join('')}
+        </ul>
+      </div>
+    ` : ''}
+
     ${incomes.length > 0 ? `
       <div style="background: rgba(59, 130, 246, 0.1); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
         <span class="badge badge-info">Wpływy i zwroty (+${analysis.totalIncomeTodayPln.toFixed(2)} PLN)</span>
@@ -338,13 +360,13 @@ export function formatAdhdDigest(analysis: DigestAnalysisResult, plan: Improveme
         <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px;">NORMALNE KOSZTY ŻYCIA (${normalExpenses.length}):</div>
         <ul style="padding-left: 18px;">
           ${normalExpenses.map(e => `
-            <li><strong>${e.merchant}</strong> (${Math.abs(e.amount).toFixed(2)} ${e.currency}) <span style="color: #64748b;">— ${e.category}</span></li>
+            <li><strong>${e.merchant}</strong> (${Math.abs(e.amount).toFixed(2)} ${e.currency}) <span style="color: #64748b;">— ${e.category}</span>${e.is_credit_account ? ' <span class="badge badge-warn" style="font-size: 0.7rem; padding: 1px 6px;">Karta kredytowa</span>' : ''}</li>
           `).join('')}
         </ul>
       </div>
     ` : ''}
 
-    ${harmfulCount === 0 && normalExpenses.length === 0 && incomes.length === 0 ? `
+    ${harmfulCount === 0 && normalExpenses.length === 0 && incomes.length === 0 && repayments.length === 0 ? `
       <p style="font-size: 0.9rem; color: #34d399; margin: 0 0 12px 0;">✓ Brak transakcji dzisiaj.</p>
     ` : ''}
 

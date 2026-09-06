@@ -5,6 +5,8 @@ import {
   analyzeSpending,
   detectSubscriptions,
   calculateCashflowForecast,
+  classifyDebtTransaction,
+  classifyHarmfulTransaction,
   type CleanTransaction,
 } from '../../src/analysis/polish-finance.js';
 
@@ -157,5 +159,83 @@ describe('Polish Finance Analysis', () => {
     expect(forecast.days_remaining).toBe(20);
     expect(forecast.safe_daily_spend_limit_pln).toBeGreaterThan(200);
     expect(forecast.status).toBe('on_track');
+  });
+
+  it('differentiates buying using credit/BNPL from paying off debt', () => {
+    // 1. Buying via BNPL (Allegro Pay, PayPo) -> new debt & harmful
+    const bnplBuy: CleanTransaction = {
+      id: 'tx-bnpl-buy',
+      bank: 'Revolut',
+      account_id: 'acc1',
+      date: '2026-09-06',
+      amount: -180.0,
+      currency: 'PLN',
+      merchant: 'Allegro Pay',
+      category: 'Shopping',
+      raw_description: 'Allegro Pay zakup smartfon',
+      is_internal_transfer: false,
+      is_income: false,
+    };
+    const bnplBuyRes = classifyDebtTransaction(bnplBuy);
+    expect(bnplBuyRes.isDebtRelated).toBe(true);
+    expect(bnplBuyRes.type).toBe('bnpl_new_debt');
+    expect(classifyHarmfulTransaction(bnplBuy).isHarmful).toBe(true);
+
+    // 2. Paying off BNPL (PayPo installment) -> installment & NOT harmful
+    const bnplRepayment: CleanTransaction = {
+      id: 'tx-paypo-rep',
+      bank: 'PKO Bank Polski',
+      account_id: 'acc2',
+      date: '2026-09-06',
+      amount: -100.0,
+      currency: 'PLN',
+      merchant: 'PayPo',
+      category: 'BNPL / Pay Later',
+      raw_description: 'PayPo spłata raty nr 1/4',
+      is_internal_transfer: false,
+      is_income: false,
+    };
+    const bnplRepRes = classifyDebtTransaction(bnplRepayment);
+    expect(bnplRepRes.isDebtRelated).toBe(true);
+    expect(bnplRepRes.type).toBe('bnpl_installment');
+    expect(classifyHarmfulTransaction(bnplRepayment).isHarmful).toBe(false);
+
+    // 3. Paying off Credit Card ("Spłata karty kredytowej") -> repayment & NOT harmful
+    const ccRepayment: CleanTransaction = {
+      id: 'tx-cc-rep',
+      bank: 'PKO Bank Polski',
+      account_id: 'acc2',
+      date: '2026-09-06',
+      amount: -1500.0,
+      currency: 'PLN',
+      merchant: 'PKO Bank Polski',
+      category: 'Debt Repayment',
+      raw_description: 'Spłata karty kredytowej VISA',
+      is_internal_transfer: true,
+      is_income: false,
+    };
+    const ccRepRes = classifyDebtTransaction(ccRepayment);
+    expect(ccRepRes.isDebtRelated).toBe(true);
+    expect(ccRepRes.type).toBe('credit_card_repayment');
+    expect(classifyHarmfulTransaction(ccRepayment).isHarmful).toBe(false);
+
+    // 4. Buying using Credit Card (spent from credit card account) -> credit card charge
+    const ccCharge: CleanTransaction = {
+      id: 'tx-cc-charge',
+      bank: 'PKO Bank Polski',
+      account_id: 'acc-credit',
+      date: '2026-09-06',
+      amount: -120.0,
+      currency: 'PLN',
+      merchant: 'Zara',
+      category: 'Shopping',
+      raw_description: 'Zakup kartą Zara Warszawa',
+      is_internal_transfer: false,
+      is_income: false,
+      is_credit_account: true,
+    };
+    const ccChargeRes = classifyDebtTransaction(ccCharge);
+    expect(ccChargeRes.isDebtRelated).toBe(true);
+    expect(ccChargeRes.type).toBe('credit_card_charge');
   });
 });
