@@ -133,6 +133,15 @@ export class SessionStore {
         notes TEXT,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS pending_connects (
+        state TEXT PRIMARY KEY,
+        bank_key TEXT NOT NULL,
+        aspsp_name TEXT NOT NULL,
+        aspsp_country TEXT NOT NULL,
+        owner_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
 
     // Seed default manual offline assets if empty
@@ -376,7 +385,46 @@ export class SessionStore {
   }
 
   deleteBankConnection(idOrKey: string): void {
-    this.db.prepare('DELETE FROM bank_connections WHERE id = ? OR bank_key = ?').run(idOrKey, idOrKey);
+    // Try deleting by specific ID first to avoid deleting other users sharing the same bank_key
+    const res = this.db.prepare('DELETE FROM bank_connections WHERE id = ?').run(idOrKey);
+    if (res.changes === 0) {
+      this.db.prepare('DELETE FROM bank_connections WHERE bank_key = ?').run(idOrKey);
+    }
+  }
+
+  savePendingConnect(state: string, data: { bankKey: string; aspspName: string; aspspCountry: string; ownerName: string }): void {
+    this.db.prepare(`
+      INSERT INTO pending_connects (state, bank_key, aspsp_name, aspsp_country, owner_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(state) DO UPDATE SET
+        bank_key = excluded.bank_key,
+        aspsp_name = excluded.aspsp_name,
+        aspsp_country = excluded.aspsp_country,
+        owner_name = excluded.owner_name,
+        created_at = excluded.created_at
+    `).run(state, data.bankKey, data.aspspName, data.aspspCountry, data.ownerName, Date.now());
+  }
+
+  getPendingConnect(state: string): { bankKey: string; aspspName: string; aspspCountry: string; ownerName: string } | null {
+    // 1 hour expiration for pending SCA attempts
+    const row = this.db.prepare('SELECT bank_key, aspsp_name, aspsp_country, owner_name, created_at FROM pending_connects WHERE state = ?').get(state) as
+      | { bank_key: string; aspsp_name: string; aspsp_country: string; owner_name: string; created_at: number }
+      | undefined;
+    if (!row) return null;
+    if (Date.now() - row.created_at > 3600_000) {
+      this.deletePendingConnect(state);
+      return null;
+    }
+    return {
+      bankKey: row.bank_key,
+      aspspName: row.aspsp_name,
+      aspspCountry: row.aspsp_country,
+      ownerName: row.owner_name,
+    };
+  }
+
+  deletePendingConnect(state: string): void {
+    this.db.prepare('DELETE FROM pending_connects WHERE state = ?').run(state);
   }
 
   store(mcpToken: string, ebSessionId: string, accountUids: string[], expiresAt: number): void {

@@ -241,4 +241,62 @@ describe('SessionStore', () => {
     store.deleteManualAccount('arleta-savings');
     expect(store.getManualAccount('arleta-savings')).toBeNull();
   });
+
+  it('persists and retrieves pending bank SCA connection attempts across reboots', () => {
+    const state = 'connect_pko_bp_test-state-123';
+    store.savePendingConnect(state, {
+      bankKey: 'pko_bp',
+      aspspName: 'PKO Bank Polski',
+      aspspCountry: 'PL',
+      ownerName: 'Arleta',
+    });
+
+    const retrieved = store.getPendingConnect(state);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.bankKey).toBe('pko_bp');
+    expect(retrieved!.aspspName).toBe('PKO Bank Polski');
+    expect(retrieved!.ownerName).toBe('Arleta');
+
+    store.deletePendingConnect(state);
+    expect(store.getPendingConnect(state)).toBeNull();
+  });
+
+  it('strictly isolates connections when multiple household members connect the same bank', () => {
+    // 1. Jakub connects PKO BP
+    const jakubId = store.saveBankConnection({
+      bank_key: 'pko_bp',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'eb-sess-jakub',
+      account_uids: ['acc-jakub-1', 'acc-jakub-2'],
+      owner_name: 'Jakub',
+      valid_until: '2026-12-01',
+    });
+
+    // 2. Arleta connects PKO BP
+    const arletaId = store.saveBankConnection({
+      bank_key: 'pko_bp',
+      aspsp_name: 'PKO Bank Polski',
+      aspsp_country: 'PL',
+      session_id: 'eb-sess-arleta',
+      account_uids: ['acc-arleta-1'],
+      owner_name: 'Arleta',
+      valid_until: '2026-12-01',
+    });
+
+    expect(jakubId).toBe('pko_bp_jakub');
+    expect(arletaId).toBe('pko_bp_arleta');
+
+    // Both must exist and have correct accounts
+    const all = store.getAllBankConnections();
+    expect(all).toHaveLength(2);
+    expect(store.getBankConnection('pko_bp_jakub')!.account_uids).toEqual(['acc-jakub-1', 'acc-jakub-2']);
+    expect(store.getBankConnection('pko_bp_arleta')!.account_uids).toEqual(['acc-arleta-1']);
+
+    // Deleting Arleta's connection MUST NOT delete Jakub's connection
+    store.deleteBankConnection(arletaId);
+    expect(store.getBankConnection('pko_bp_arleta')).toBeNull();
+    expect(store.getBankConnection('pko_bp_jakub')).not.toBeNull();
+    expect(store.getBankConnection('pko_bp_jakub')!.account_uids).toEqual(['acc-jakub-1', 'acc-jakub-2']);
+  });
 });

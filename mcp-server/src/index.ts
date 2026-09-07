@@ -126,6 +126,8 @@ app.get('/health', async (_req, res) => {
 // ==========================================
 
 app.get('/connect', (req, res) => {
+  const selectedOwner = ((req.query.owner as string) || '').trim();
+  const defaultOwner = selectedOwner || 'Jakub';
   const connected = sessionStore.getAllBankConnections();
   const manualAccounts = sessionStore.getAllManualAccounts();
   const statusMsg = req.query.status as string | undefined;
@@ -210,9 +212,13 @@ app.get('/connect', (req, res) => {
       cursor: pointer;
       text-decoration: none;
       font-size: 0.9rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
     }
     .btn:hover { opacity: 0.9; }
     .btn-secondary { background: #475569; }
+    .btn-active-pill { background: #2563eb; border: 1px solid #60a5fa; color: #fff; font-weight: 600; }
     .btn-danger { background: var(--danger); }
     .docs {
       background: var(--card);
@@ -231,6 +237,24 @@ app.get('/connect', (req, res) => {
     }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   </style>
+  <script>
+    function setMember(name) {
+      document.querySelectorAll('input[name="owner"], input[name="owner_name"]').forEach(function(el) {
+        el.value = name;
+      });
+      document.querySelectorAll('.owner-pill').forEach(function(btn) {
+        if (btn.getAttribute('data-owner') === name) {
+          btn.classList.add('btn-active-pill');
+          btn.classList.remove('btn-secondary');
+        } else {
+          btn.classList.remove('btn-active-pill');
+          btn.classList.add('btn-secondary');
+        }
+      });
+      var badges = document.querySelectorAll('.active-owner-display');
+      badges.forEach(function(b) { b.innerText = name; });
+    }
+  </script>
 </head>
 <body>
   <div class="container">
@@ -245,6 +269,19 @@ app.get('/connect', (req, res) => {
     ${statusMsg === 'manual_updated' ? `<div class="alert alert-success">✅ Zaktualizowano saldo dla: <strong>${bankParam || 'Aktywo'}</strong>!</div>` : ''}
     ${statusMsg === 'manual_deleted' ? `<div class="alert alert-success">🗑️ Usunięto aktywo: <strong>${bankParam || 'Aktywo'}</strong>.</div>` : ''}
     ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error: ${errorMsg || 'Operacja nie powiodła się'}</div>` : ''}
+
+    <div style="background: rgba(30, 41, 59, 0.8); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span style="font-size: 0.9rem; font-weight: 600; color: var(--muted);">Household Profile:</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" onclick="setMember('Jakub')" data-owner="Jakub" class="btn owner-pill ${defaultOwner.toLowerCase() === 'jakub' ? 'btn-active-pill' : 'btn-secondary'}" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">👤 Jakub</button>
+          <button type="button" onclick="setMember('Arleta')" data-owner="Arleta" class="btn owner-pill ${defaultOwner.toLowerCase() === 'arleta' ? 'btn-active-pill' : 'btn-secondary'}" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">👤 Arleta</button>
+        </div>
+      </div>
+      <div style="font-size: 0.85rem; color: #94a3b8;">
+        Connecting for: <strong class="active-owner-display" style="color: #60a5fa; font-size: 0.95rem;">${defaultOwner}</strong>
+      </div>
+    </div>
 
     <h2 style="font-size: 1.2rem; margin: 0 0 1rem 0;">Connected Bank Accounts</h2>
     <div class="card-list">
@@ -279,7 +316,7 @@ app.get('/connect', (req, res) => {
         <span>➕</span> Connect a Bank Account (via Bank SCA Login)
       </h3>
       <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
-        Select a bank and specify who this account belongs to. Multiple people (e.g. household members) can connect accounts from the same bank:
+        Select a bank. Currently connecting as <strong class="active-owner-display" style="color: #60a5fa;">${defaultOwner}</strong> (switch above if needed). Accounts from the same bank for Jakub and Arleta are stored separately and will never overwrite each other:
       </p>
       <form action="/connect/start" method="GET" style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
         <select 
@@ -292,8 +329,8 @@ app.get('/connect', (req, res) => {
         <input 
           type="text" 
           name="owner" 
-          placeholder="Owner name (e.g. Jakub, Karolina)" 
-          value="Jakub" 
+          placeholder="Owner name (e.g. Jakub, Arleta)" 
+          value="${defaultOwner}" 
           required 
           style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
@@ -319,8 +356,8 @@ app.get('/connect', (req, res) => {
         <input 
           type="text" 
           name="owner_name" 
-          placeholder="Owner name (e.g. Jakub, Karolina)" 
-          value="Jakub" 
+          placeholder="Owner name (e.g. Jakub, Arleta)" 
+          value="${defaultOwner}" 
           required 
           style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
@@ -471,11 +508,15 @@ app.get('/connect/start', async (req, res) => {
     const ebState = `connect_${bankDef.key}_${randomUUID()}`;
     const callbackUrl = `${config.externalUrl}/auth/eb-callback`;
 
-    pendingConnects.set(ebState, {
+    const pendingData = {
       bankKey: bankDef.key,
       aspspName: bankDef.name,
       aspspCountry: bankDef.country,
       ownerName,
+    };
+    sessionStore.savePendingConnect(ebState, pendingData);
+    pendingConnects.set(ebState, {
+      ...pendingData,
       createdAt: Date.now(),
     });
 
@@ -649,11 +690,12 @@ if (oauthProvider) {
 
     // Check if this was initiated by /connect/start
     if (state.startsWith('connect_')) {
-      const pending = pendingConnects.get(state);
+      const pending = sessionStore.getPendingConnect(state) || pendingConnects.get(state);
       if (!pending) {
         res.redirect(`/connect?status=error&message=${encodeURIComponent('Expired bank connection attempt')}`);
         return;
       }
+      sessionStore.deletePendingConnect(state);
       pendingConnects.delete(state);
 
       try {
