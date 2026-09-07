@@ -109,6 +109,9 @@ jobs:
 
       - name: Verify Live Service Health
         run: |
-          echo "Verifying cluster service health via Tailscale..."
+          echo "Verifying homelab service health via Tailscale..."
           curl -sf http://100.69.232.58:30081/health | grep -q '"status":"ok"'
-          echo "Homelab cluster deployment verified successfully!"
+          echo "Homelab endpoint OK."
+          echo "Verifying public Cloudflare edge health for adhd-budget..."
+          curl -sf https://adhdbudget.bieda.it/health | grep -q '"status":"ok"'
+          echo "Public edge verified successfully!"
