@@ -431,7 +431,8 @@ export class EnableBankingOAuthProvider implements OAuthServerProvider {
           id="username" 
           type="text" 
           name="username" 
-          value="${escapeHtml(this.defaultUser)}" 
+          value="${this.staticUsers.size <= 1 ? escapeHtml(this.defaultUser) : ''}"
+          placeholder="Username" 
           autocomplete="username" 
           required 
         />

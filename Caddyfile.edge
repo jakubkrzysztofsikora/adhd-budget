@@ -1,4 +1,6 @@
 # Production Caddy Edge configuration — HTTP only (Cloudflare handles TLS)
+# The app pod runs on THIS node (k3s-mikrus-1), so proxy to its local NodePort.
+# All requests stay on localhost — no tailscale hops.
 :80 {
     # Security headers
     header {
@@ -9,12 +11,12 @@
 
     # Health endpoint
     handle /health {
-        reverse_proxy http://127.0.0.1:8081
+        reverse_proxy http://127.0.0.1:30081
     }
 
     # MCP Server — Streamable HTTP with SSE
     handle /mcp* {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             flush_interval -1
             header_up Accept-Encoding identity
             header_down Cache-Control no-cache
@@ -26,7 +28,7 @@
 
     # OAuth discovery
     handle /.well-known/* {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
@@ -34,28 +36,28 @@
 
     # OAuth endpoints (Claude.ai / ChatGPT / custom clients)
     handle /authorize {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
     }
 
     handle /token {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
     }
 
     handle /register {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
     }
 
     handle /revoke {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
@@ -63,14 +65,17 @@
 
     # Enable Banking callback and connect dashboard
     handle /auth/* {
-        reverse_proxy http://127.0.0.1:8081 {
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
     }
 
     handle /connect* {
-        reverse_proxy http://127.0.0.1:8081 {
+        basic_auth {
+            household $2a$14$r5Dcib.0.HIFDuNhCSauH.VHZHtqw53xRGixDYVaac5tc35gkQjh.
+        }
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }
@@ -78,7 +83,10 @@
 
     # Debug endpoints
     handle /debug/* {
-        reverse_proxy http://127.0.0.1:8081 {
+        basic_auth {
+            household $2a$14$r5Dcib.0.HIFDuNhCSauH.VHZHtqw53xRGixDYVaac5tc35gkQjh.
+        }
+        reverse_proxy http://127.0.0.1:30081 {
             header_up X-Forwarded-Proto https
             header_up X-Forwarded-Host {host}
         }

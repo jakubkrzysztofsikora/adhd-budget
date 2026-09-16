@@ -16,6 +16,21 @@ spec:
     requests:
       storage: 1Gi
 ---
+# Active data volume — live on the publicly-reachable node (k3s-mikrus-1).
+# The adhd-budget-data PVC above is retained on k3s-cp-1 as a backup.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: adhd-budget-data-mikrus
+  namespace: adhd-budget
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -48,6 +63,10 @@ spec:
       labels:
         app: adhd-budget
     spec:
+      # Pin to the Mikrus node so the Cloudflare origin (same host) reaches the
+      # pod over localhost — the home-network tailscale path is lossy.
+      nodeSelector:
+        kubernetes.io/hostname: k3s-mikrus-1
       imagePullSecrets:
         - name: forgejo-registry-cred
       containers:
@@ -80,6 +99,11 @@ spec:
                 secretKeyRef:
                   name: adhd-budget-secrets
                   key: MCP_TOKEN
+            - name: OAUTH_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: adhd-budget-secrets
+                  key: OAUTH_USERS
             - name: SCW_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -102,12 +126,14 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 20
+            timeoutSeconds: 10
           volumeMounts:
             - name: data
               mountPath: /app/data
@@ -117,7 +143,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: adhd-budget-data
+            claimName: adhd-budget-data-mikrus
         - name: keys
           secret:
             secretName: adhd-budget-keys

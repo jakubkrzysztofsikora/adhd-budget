@@ -77,6 +77,20 @@ jobs:
           echo "100.93.202.31 forgejo.tail5d39b4.ts.net" | sudo tee -a /etc/hosts
           echo "100.69.232.58 k3s-cp-1.tail5d39b4.ts.net" | sudo tee -a /etc/hosts
 
+      - name: Wait for Forgejo registry over Tailscale
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://forgejo.tail5d39b4.ts.net/v2/ || true)
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
+              echo "Forgejo registry reachable (HTTP $code)"
+              exit 0
+            fi
+            echo "attempt $i: Forgejo not reachable yet (HTTP ${code:-timeout}), retrying in 6s..."
+            sleep 6
+          done
+          echo "Forgejo registry unreachable after 20 attempts"
+          exit 1
+
       - name: Log in to Forgejo Container Registry
         uses: docker/login-action@v3
         with:

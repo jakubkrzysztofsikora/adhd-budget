@@ -565,6 +565,7 @@ Enable Banking uses JWT-based authentication with RS256 signing:
 - Sandbox credentials provide full API access with test data
 - JWT authentication is required for ALL endpoints, including OAuth
 - MCP Inspector OAuth flow requires proper Enable Banking sandbox registration
+- **Link the account in Enable Banking first**: An account must be linked in the Enable Banking control panel before it can be added here. Unlinked accounts complete the full bank SCA but the session comes back `AUTHORIZED` with an empty `accounts` list — the app logs `bank_connected_with_zero_accounts`, the connection card shows 0 accounts, and nothing syncs. Fix: link the account in EB, then re-connect (Refresh) in `/connect`.
 
 ## 14. Deployment Checklist
 

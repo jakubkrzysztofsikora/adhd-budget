@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { rateLimit } from 'express-rate-limit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
@@ -77,8 +78,18 @@ app.use(express.urlencoded({ extended: false }));
 // In-memory pending connects for /connect/start -> /auth/eb-callback
 const pendingConnects = new Map<string, { bankKey: string; aspspName: string; aspspCountry: string; ownerName: string; createdAt: number }>();
 
-// Health endpoint (unauthenticated)
-app.get('/health', async (_req, res) => {
+// HTML escaping for values reflected into the /connect dashboard (query params + stored names)
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Health endpoint — minimal public payload; household details only with a valid bearer token
+app.get('/health', async (req, res) => {
   let ebApiReachable = false;
   let ebApiError = '';
   if (ebClient) {
@@ -91,8 +102,11 @@ app.get('/health', async (_req, res) => {
     }
   }
 
-  const connectedBanks = sessionStore.getAllBankConnections();
-  const manualAccounts = sessionStore.getAllManualAccounts();
+  const authHeader = req.headers.authorization || '';
+  const authed = !!config.mcpToken && authHeader === `Bearer ${config.mcpToken}`;
+
+  const connectedBanks = authed ? sessionStore.getAllBankConnections() : [];
+  const manualAccounts = authed ? sessionStore.getAllManualAccounts() : [];
 
   res.json({
     status: 'ok',
@@ -102,22 +116,24 @@ app.get('/health', async (_req, res) => {
     ebApiReachable,
     ebApiError: ebApiError || undefined,
     externalUrl: config.externalUrl,
-    connected_banks: connectedBanks.map(b => ({
-      id: b.id,
-      bank: b.aspsp_name,
-      key: b.bank_key,
-      owner: b.owner_name,
-      accounts: b.account_uids.length,
-      valid_until: b.valid_until,
-    })),
-    manual_accounts: manualAccounts.map(m => ({
-      id: m.id,
-      name: m.name,
-      type: m.type,
-      balance: m.balance,
-      currency: m.currency,
-      owner: m.owner_name,
-    })),
+    ...(authed ? {
+      connected_banks: connectedBanks.map(b => ({
+        id: b.id,
+        bank: b.aspsp_name,
+        key: b.bank_key,
+        owner: b.owner_name,
+        accounts: b.account_uids.length,
+        valid_until: b.valid_until,
+      })),
+      manual_accounts: manualAccounts.map(m => ({
+        id: m.id,
+        name: m.name,
+        type: m.type,
+        balance: m.balance,
+        currency: m.currency,
+        owner: m.owner_name,
+      })),
+    } : {}),
   });
 });
 
@@ -133,6 +149,9 @@ app.get('/connect', (req, res) => {
   const statusMsg = req.query.status as string | undefined;
   const bankParam = req.query.bank as string | undefined;
   const errorMsg = req.query.message as string | undefined;
+  const bankParamSafe = escapeHtml(bankParam || '');
+  const errorMsgSafe = escapeHtml(errorMsg || '');
+  const defaultOwnerSafe = escapeHtml(defaultOwner);
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -179,6 +198,7 @@ app.get('/connect', (req, res) => {
       font-size: 0.9rem;
     }
     .alert-success { background: rgba(16, 185, 129, 0.15); border: 1px solid var(--success); color: #34d399; }
+    .alert-warning { background: rgba(245, 158, 11, 0.15); border: 1px solid var(--warning); color: #fbbf24; }
     .alert-error { background: rgba(239, 68, 68, 0.15); border: 1px solid var(--danger); color: #f87171; }
     .card-list { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2.5rem; }
     .bank-card {
@@ -254,6 +274,10 @@ app.get('/connect', (req, res) => {
       var badges = document.querySelectorAll('.active-owner-display');
       badges.forEach(function(b) { b.innerText = name; });
     }
+    document.addEventListener('click', function(e) {
+      var el = e.target.closest('[data-confirm]');
+      if (el && !confirm(el.getAttribute('data-confirm'))) { e.preventDefault(); }
+    });
   </script>
 </head>
 <body>
@@ -263,12 +287,13 @@ app.get('/connect', (req, res) => {
       <p class="sub">Connect and manage Polish bank accounts across multiple household members safely for AI assistants.</p>
     </header>
 
-    ${statusMsg === 'connected' ? `<div class="alert alert-success">✅ Successfully connected <strong>${bankParam || 'bank'}</strong>!</div>` : ''}
-    ${statusMsg === 'disconnected' ? `<div class="alert alert-success">Disconnected <strong>${bankParam || 'bank'}</strong>.</div>` : ''}
-    ${statusMsg === 'manual_saved' ? `<div class="alert alert-success">✅ Zapisano aktywo: <strong>${bankParam || 'Aktywo'}</strong>!</div>` : ''}
-    ${statusMsg === 'manual_updated' ? `<div class="alert alert-success">✅ Zaktualizowano saldo dla: <strong>${bankParam || 'Aktywo'}</strong>!</div>` : ''}
-    ${statusMsg === 'manual_deleted' ? `<div class="alert alert-success">🗑️ Usunięto aktywo: <strong>${bankParam || 'Aktywo'}</strong>.</div>` : ''}
-    ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error: ${errorMsg || 'Operacja nie powiodła się'}</div>` : ''}
+    ${statusMsg === 'connected' ? `<div class="alert alert-success">✅ Successfully connected <strong>${bankParamSafe || 'bank'}</strong>!</div>` : ''}
+    ${statusMsg === 'warning' ? `<div class="alert alert-warning">⚠️ ${errorMsgSafe || 'Check the connection details below.'}</div>` : ''}
+    ${statusMsg === 'disconnected' ? `<div class="alert alert-success">Disconnected <strong>${bankParamSafe || 'bank'}</strong>.</div>` : ''}
+    ${statusMsg === 'manual_saved' ? `<div class="alert alert-success">✅ Zapisano aktywo: <strong>${bankParamSafe || 'Aktywo'}</strong>!</div>` : ''}
+    ${statusMsg === 'manual_updated' ? `<div class="alert alert-success">✅ Zaktualizowano saldo dla: <strong>${bankParamSafe || 'Aktywo'}</strong>!</div>` : ''}
+    ${statusMsg === 'manual_deleted' ? `<div class="alert alert-success">🗑️ Usunięto aktywo: <strong>${bankParamSafe || 'Aktywo'}</strong>.</div>` : ''}
+    ${statusMsg === 'error' ? `<div class="alert alert-error">❌ Error: ${errorMsgSafe || 'Operacja nie powiodła się'}</div>` : ''}
 
     <div style="background: rgba(30, 41, 59, 0.8); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
       <div style="display: flex; align-items: center; gap: 0.75rem;">
@@ -279,7 +304,7 @@ app.get('/connect', (req, res) => {
         </div>
       </div>
       <div style="font-size: 0.85rem; color: #94a3b8;">
-        Connecting for: <strong class="active-owner-display" style="color: #60a5fa; font-size: 0.95rem;">${defaultOwner}</strong>
+        Connecting for: <strong class="active-owner-display" style="color: #60a5fa; font-size: 0.95rem;">${defaultOwnerSafe}</strong>
       </div>
     </div>
 
@@ -291,8 +316,8 @@ app.get('/connect', (req, res) => {
         <div class="bank-card">
           <div class="bank-info">
             <h3 style="display: flex; align-items: center; gap: 0.5rem;">
-              ${conn.aspsp_name}
-              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${conn.owner_name}</span>
+              ${escapeHtml(conn.aspsp_name)}
+              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${escapeHtml(conn.owner_name)}</span>
             </h3>
             <div class="meta">
               <span class="badge badge-active">Active (${daysLeft} days left)</span> ${conn.account_uids.length} account(s) synced
@@ -300,7 +325,7 @@ app.get('/connect', (req, res) => {
           </div>
           <div style="display: flex; gap: 0.5rem;">
             <a href="/connect/start?bank=${conn.bank_key}&owner=${encodeURIComponent(conn.owner_name)}" class="btn btn-secondary">Refresh</a>
-            <a href="/connect/disconnect?id=${encodeURIComponent(conn.id)}" class="btn btn-danger" onclick="return confirm('Disconnect ${conn.aspsp_name} (${conn.owner_name})?')">Disconnect</a>
+            <a href="/connect/disconnect?id=${encodeURIComponent(conn.id)}" class="btn btn-danger" data-confirm="Disconnect ${escapeHtml(conn.aspsp_name)} (${escapeHtml(conn.owner_name)})?">Disconnect</a>
           </div>
         </div>
         `;
@@ -316,7 +341,10 @@ app.get('/connect', (req, res) => {
         <span>➕</span> Connect a Bank Account (via Bank SCA Login)
       </h3>
       <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem;">
-        Select a bank. Currently connecting as <strong class="active-owner-display" style="color: #60a5fa;">${defaultOwner}</strong> (switch above if needed). Accounts from the same bank for Jakub and Arleta are stored separately and will never overwrite each other:
+        Select a bank. Currently connecting as <strong class="active-owner-display" style="color: #60a5fa;">${defaultOwnerSafe}</strong> (switch above if needed). Accounts from the same bank for Jakub and Arleta are stored separately and will never overwrite each other:
+      </p>
+      <p style="color: #fbbf24; font-size: 0.85rem; margin-bottom: 1rem;">
+        ⚠️ Important: at the bank you will see a consent screen listing your accounts. <strong>Select ALL accounts</strong> you want to share — if none are selected, the connection will be created with 0 accounts and no data will sync.
       </p>
       <form action="/connect/start" method="GET" style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
         <select 
@@ -330,7 +358,7 @@ app.get('/connect', (req, res) => {
           type="text" 
           name="owner" 
           placeholder="Owner name (e.g. Jakub, Arleta)" 
-          value="${defaultOwner}" 
+          value="${defaultOwnerSafe}" 
           required 
           style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
@@ -357,7 +385,7 @@ app.get('/connect', (req, res) => {
           type="text" 
           name="owner_name" 
           placeholder="Owner name (e.g. Jakub, Arleta)" 
-          value="${defaultOwner}" 
+          value="${defaultOwnerSafe}" 
           required 
           style="width: 200px; padding: 0.6rem 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #090d16; color: var(--text); font-size: 0.85rem;"
         />
@@ -383,18 +411,18 @@ app.get('/connect', (req, res) => {
         <div class="bank-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
           <div class="bank-info" style="min-width: 240px;">
             <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-              ${acc.name}
-              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${acc.owner_name}</span>
+              ${escapeHtml(acc.name)}
+              <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">👤 ${escapeHtml(acc.owner_name)}</span>
             </h3>
             <div class="meta" style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
               <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">${typeLabel}</span>
-              ${acc.institution ? `<span style="color: var(--muted); font-size: 0.8rem;">(${acc.institution})</span>` : ''}
-              ${acc.notes ? `<span style="color: #64748b; font-size: 0.75rem; font-style: italic;">${acc.notes}</span>` : ''}
+              ${acc.institution ? `<span style="color: var(--muted); font-size: 0.8rem;">(${escapeHtml(acc.institution)})</span>` : ''}
+              ${acc.notes ? `<span style="color: #64748b; font-size: 0.75rem; font-style: italic;">${escapeHtml(acc.notes)}</span>` : ''}
             </div>
           </div>
           <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
             <form action="/connect/manual-account/update" method="POST" style="display: flex; align-items: center; gap: 0.5rem; margin: 0;">
-              <input type="hidden" name="id" value="${acc.id}" />
+              <input type="hidden" name="id" value="${escapeHtml(acc.id)}" />
               <input 
                 type="number" 
                 step="any" 
@@ -406,7 +434,7 @@ app.get('/connect', (req, res) => {
               <span style="font-weight: 600; font-size: 0.85rem; color: #94a3b8; min-width: 35px;">${acc.currency}</span>
               <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;">Save</button>
             </form>
-            <a href="/connect/manual-account/delete?id=${encodeURIComponent(acc.id)}" class="btn btn-danger" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" onclick="return confirm('Delete ${acc.name}?')">Delete</a>
+            <a href="/connect/manual-account/delete?id=${encodeURIComponent(acc.id)}" class="btn btn-danger" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" data-confirm="Delete ${escapeHtml(acc.name)}?">Delete</a>
           </div>
         </div>
         `;
@@ -597,6 +625,10 @@ app.post('/connect/import-session', async (req, res) => {
     });
 
     logger.info({ bank: aspspName, owner: ownerName, sessionId, accounts: accountUids.length }, 'session_imported_successfully');
+    if (accountUids.length === 0) {
+      res.redirect(`/connect?status=warning&message=${encodeURIComponent(`${aspspName} (${ownerName}): this session has 0 accounts. Create a new session at the bank and select ALL accounts on the consent screen.`)}`);
+      return;
+    }
     res.redirect(`/connect?status=connected&bank=${encodeURIComponent(`${aspspName} (${ownerName})`)}`);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -668,6 +700,22 @@ app.get('/connect/manual-account/delete', (req, res) => {
 // Mount OAuth routes if provider is available
 if (oauthProvider) {
   const issuerUrl = new URL(config.externalUrl);
+  // Rate limiting for OAuth endpoints (defense in depth — Cloudflare also rate limits /authorize)
+  const makeLimiter = (opts: { windowMs: number; limit: number; name: string }) => rateLimit({
+    windowMs: opts.windowMs,
+    limit: opts.limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (req, res) => {
+      logger.warn({ path: req.path, ip: req.ip, limiter: opts.name }, 'rate_limit_exceeded');
+      res.status(429).json({ error: 'too_many_requests', error_description: 'Too many attempts — try again later.' });
+    },
+  });
+  app.use('/authorize', makeLimiter({ windowMs: 5 * 60 * 1000, limit: 20, name: 'authorize' }));
+  app.use('/token', makeLimiter({ windowMs: 5 * 60 * 1000, limit: 60, name: 'token' }));
+  app.use('/register', makeLimiter({ windowMs: 60 * 60 * 1000, limit: 10, name: 'register' }));
+  app.use('/revoke', makeLimiter({ windowMs: 5 * 60 * 1000, limit: 20, name: 'revoke' }));
+
   app.use(mcpAuthRouter({
     provider: oauthProvider,
     issuerUrl,
@@ -717,6 +765,11 @@ if (oauthProvider) {
         });
 
         logger.info({ bank: pending.aspspName, owner: pending.ownerName, accounts: accountUids.length }, 'bank_connected_successfully');
+        if (accountUids.length === 0) {
+          logger.warn({ bank: pending.aspspName, owner: pending.ownerName }, 'bank_connected_with_zero_accounts');
+          res.redirect(`/connect?status=warning&message=${encodeURIComponent(`${pending.aspspName} (${pending.ownerName}) connected, but the bank shared 0 accounts. Click "Refresh" on the card and select ALL accounts on the bank consent screen.`)}`);
+          return;
+        }
         res.redirect(`/connect?status=connected&bank=${encodeURIComponent(`${pending.aspspName} (${pending.ownerName})`)}`);
         return;
       } catch (err) {
