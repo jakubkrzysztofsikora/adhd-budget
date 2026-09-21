@@ -97,11 +97,12 @@ export class DigestService {
             }
           }
 
-          // Transactions
+          // Transactions (tombstoned/hidden transactions are filtered out)
           let rawTxs: EnableBankingTransaction[] | null = null;
           try {
-            rawTxs = await this.ebClient.getTransactions(accountId, sixtyDaysAgo, todayStr);
-            this.sessionStore.saveAccountTransactions(accountId, rawTxs);
+            const fetched = await this.ebClient.getTransactions(accountId, sixtyDaysAgo, todayStr);
+            this.sessionStore.saveAccountTransactions(accountId, fetched);
+            rawTxs = this.sessionStore.filterHiddenTransactions(accountId, fetched);
           } catch (err) {
             logger.warn({ accountId, err }, 'failed_to_fetch_transactions_from_bank_trying_cache');
             rawTxs = (this.sessionStore.getAccountTransactions(accountId) as EnableBankingTransaction[]) || null;

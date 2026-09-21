@@ -88,19 +88,40 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// Health endpoint — minimal public payload; household details only with a valid bearer token
-app.get('/health', async (req, res) => {
-  let ebApiReachable = false;
-  let ebApiError = '';
-  if (ebClient) {
+// Enable Banking reachability is reported by /health, but probing the bank API
+// on every request is what got us flagged for excessive polling — k8s hits
+// this endpoint every 10-20 seconds. Cache the result for an hour and refresh
+// it in the background when stale, so health checks never block on (or hammer)
+// the Enable Banking API.
+const EB_HEALTH_TTL_MS = 60 * 60 * 1000;
+// Retry sooner after a failure so a recovered bank API becomes visible quickly.
+const EB_HEALTH_FAILURE_TTL_MS = 5 * 60 * 1000;
+let ebHealthCache: { reachable: boolean; error: string; checkedAt: number } = { reachable: false, error: '', checkedAt: 0 };
+let ebHealthCheckInFlight: Promise<void> | null = null;
+
+function refreshEbHealthInBackground(client: EnableBankingClient): void {
+  if (ebHealthCheckInFlight) return;
+  ebHealthCheckInFlight = (async () => {
     try {
-      await ebClient.listAspsps('PL');
-      ebApiReachable = true;
+      // Bounded so a stalled bank API cannot leave the in-flight guard stuck forever
+      await client.listAspsps('PL', AbortSignal.timeout(10_000));
+      ebHealthCache = { reachable: true, error: '', checkedAt: Date.now() };
     } catch (err: unknown) {
       const e = err as Error & { cause?: Error };
-      ebApiError = e.cause?.message || e.message || String(err);
+      ebHealthCache = { reachable: false, error: e.cause?.message || e.message || String(err), checkedAt: Date.now() };
+    } finally {
+      ebHealthCheckInFlight = null;
     }
+  })();
+}
+
+// Health endpoint — minimal public payload; household details only with a valid bearer token
+app.get('/health', async (req, res) => {
+  const ebHealthTtl = ebHealthCache.reachable ? EB_HEALTH_TTL_MS : EB_HEALTH_FAILURE_TTL_MS;
+  if (ebClient && Date.now() - ebHealthCache.checkedAt > ebHealthTtl) {
+    refreshEbHealthInBackground(ebClient);
   }
+  const { reachable: ebApiReachable, error: ebApiError, checkedAt: ebApiCheckedAt } = ebHealthCache;
 
   const authHeader = req.headers.authorization || '';
   const authed = !!config.mcpToken && authHeader === `Bearer ${config.mcpToken}`;
@@ -113,7 +134,9 @@ app.get('/health', async (req, res) => {
     version: '2.1.0',
     auth: oauthProvider ? 'oauth' : 'none',
     ebConfigured: !!ebClient,
-    ebApiReachable,
+    // Omitted until the first probe completes so a cold start is not mistaken for an outage
+    ebApiReachable: ebApiCheckedAt ? ebApiReachable : undefined,
+    ebApiCheckedAt: ebApiCheckedAt ? new Date(ebApiCheckedAt).toISOString() : undefined,
     ebApiError: ebApiError || undefined,
     externalUrl: config.externalUrl,
     ...(authed ? {

@@ -68,7 +68,7 @@ export class EnableBankingClient {
       .sign(key);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const jwt = await this.generateJwt();
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -80,6 +80,7 @@ export class EnableBankingClient {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     });
 
     if (!res.ok) {
@@ -90,8 +91,8 @@ export class EnableBankingClient {
     return res.json() as Promise<T>;
   }
 
-  async listAspsps(country: string): Promise<EnableBankingAspsp[]> {
-    const response = await this.request<{ aspsps: EnableBankingAspsp[] }>('GET', `/aspsps?country=${encodeURIComponent(country)}`);
+  async listAspsps(country: string, signal?: AbortSignal): Promise<EnableBankingAspsp[]> {
+    const response = await this.request<{ aspsps: EnableBankingAspsp[] }>('GET', `/aspsps?country=${encodeURIComponent(country)}`, undefined, signal);
     return response.aspsps;
   }
 

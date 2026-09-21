@@ -51,6 +51,49 @@ describe('SessionStore', () => {
     expect(record).toBeNull();
   });
 
+  it('hides transactions by entry_reference and transaction_id, and keeps them hidden on re-read', () => {
+    const keep = { entry_reference: 'O;1', transaction_id: 'Tzox', transaction_amount: { amount: '10.00' } };
+    const drop = { entry_reference: 'O;2', transaction_id: 'Tzoy', transaction_amount: { amount: '666.00' } };
+    store.saveAccountTransactions('acc-hidden', [keep, drop]);
+
+    const result = store.hideTransactions([{ accountId: 'acc-hidden', tx: drop, reason: 'test:card-chain' }]);
+    expect(result).toEqual({ transactions: 1, keysWritten: 2 }); // ref + tid
+
+    const visible = store.getAccountTransactions('acc-hidden') as Array<{ entry_reference: string }>;
+    expect(visible.map(t => t.entry_reference)).toEqual(['O;1']);
+
+    // Filtering is identity-based, so it also applies to freshly re-fetched copies
+    const refetched = [{ ...keep }, { ...drop }];
+    expect(store.filterHiddenTransactions('acc-hidden', refetched).map(t => t.entry_reference)).toEqual(['O;1']);
+    expect(store.isTransactionHidden('acc-hidden', { transaction_id: 'Tzoy' })).toBe(true);
+    expect(store.isTransactionHidden('acc-hidden', { transaction_id: 'Tzox' })).toBe(false);
+
+    // Raw cache is untouched (soft delete, not physical)
+    const raw = store.getDb().prepare('SELECT transactions_json FROM account_cache WHERE account_id = ?').get('acc-hidden') as { transactions_json: string };
+    expect(JSON.parse(raw.transactions_json)).toHaveLength(2);
+
+    // Reversible
+    expect(store.unhideTransactions({ accountId: 'acc-hidden', reason: 'test:card-chain' })).toBe(2);
+    expect((store.getAccountTransactions('acc-hidden') as unknown[]).length).toBe(2);
+  });
+
+  it('hides transactions without identifiers via content-hash key', () => {
+    const tx = { transaction_amount: { amount: '12.34' }, booking_date: '2026-09-08', remittance_information: ['Z', 'TRANSFER'] };
+    store.saveAccountTransactions('acc-hash', [tx]);
+    store.hideTransactions([{ accountId: 'acc-hash', tx, reason: 'test:hash' }]);
+    expect(store.filterHiddenTransactions('acc-hash', [tx])).toHaveLength(0);
+    expect(store.filterHiddenTransactions('acc-hash', [{ ...tx, transaction_amount: { amount: '12.35' } }])).toHaveLength(1);
+  });
+
+  it('does not over-hide identical-content twins when identifiers differ', () => {
+    const twinA = { entry_reference: 'A;1', transaction_id: 'Ta', transaction_amount: { amount: '100.00' }, credit_debit_indicator: 'DBIT', booking_date: '2026-09-08', remittance_information: ['Z', 'TRANSFER'] };
+    const twinB = { entry_reference: 'B;1', transaction_id: 'Tb', transaction_amount: { amount: '100.00' }, credit_debit_indicator: 'DBIT', booking_date: '2026-09-08', remittance_information: ['Z', 'TRANSFER'] };
+    store.saveAccountTransactions('acc-twin', [twinA, twinB]);
+    store.hideTransactions([{ accountId: 'acc-twin', tx: twinA, reason: 'test:twin' }]);
+    const visible = store.getAccountTransactions('acc-twin') as Array<{ entry_reference: string }>;
+    expect(visible.map(t => t.entry_reference)).toEqual(['B;1']);
+  });
+
   it('cleanup removes expired sessions', () => {
     store.store('active', 'eb-1', ['acc-1'], Date.now() + 3600_000);
     store.store('expired-1', 'eb-2', ['acc-2'], Date.now() - 1000);

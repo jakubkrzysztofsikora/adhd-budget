@@ -37,8 +37,61 @@ export interface ManualAccount {
   updated_at: number;
 }
 
+export interface HiddenTransactionRow {
+  account_id: string;
+  tx_key: string;
+  reason: string;
+  payload: string | null;
+  hidden_at: number;
+}
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Stable identity keys for a raw Enable Banking transaction.
+ *
+ * Both `entry_reference` and `transaction_id` are emitted (when present) so a
+ * tombstone matches regardless of which identifier a caller has at hand —
+ * list endpoints carry `entry_reference`, while `getTransactionDetails` is
+ * addressed by `transaction_id`. Only when neither identifier exists does the
+ * key fall back to a content hash (date + amount + direction + remittance).
+ *
+ * Known ceilings:
+ * - A transaction whose bank-issued identifiers change after booking
+ *   (pending → booked) will not match its tombstone.
+ * - The hash is deliberately NOT emitted alongside identifiers — two
+ *   genuinely identical transactions (same date/amount/direction/remittance)
+ *   would otherwise be hidden together, silently dropping an innocent one.
+ * - For transactions with no identifiers at all, identical-content twins are
+ *   indistinguishable and are hidden together by design.
+ */
+export function transactionKeyCandidates(tx: unknown): string[] {
+  const t = (tx || {}) as {
+    entry_reference?: unknown;
+    transaction_id?: unknown;
+    transaction_amount?: { amount?: unknown };
+    credit_debit_indicator?: unknown;
+    booking_date?: unknown;
+    value_date?: unknown;
+    transaction_date?: unknown;
+    remittance_information?: unknown;
+    remittance_information_unstructured?: unknown;
+  };
+  const keys: string[] = [];
+  if (t.entry_reference) keys.push(`ref:${String(t.entry_reference)}`);
+  if (t.transaction_id) keys.push(`tid:${String(t.transaction_id)}`);
+  if (keys.length > 0) return keys;
+
+  const amount = t.transaction_amount?.amount ?? '';
+  const date = t.booking_date || t.value_date || t.transaction_date || '';
+  const indicator = t.credit_debit_indicator ?? '';
+  const remittance = JSON.stringify(
+    t.remittance_information ?? t.remittance_information_unstructured ?? '',
+  );
+  keys.push(`hash:${createHash('sha1').update(`${String(date)}|${String(amount)}|${String(indicator)}|${remittance}`).digest('hex')}`);
+  return keys;
 }
 
 export class SessionStore {
@@ -142,6 +195,17 @@ export class SessionStore {
         owner_name TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS hidden_transactions (
+        account_id TEXT NOT NULL,
+        tx_key TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        payload TEXT,
+        hidden_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, tx_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_hidden_transactions_account ON hidden_transactions(account_id);
     `);
 
     // Seed default manual offline assets if empty
@@ -265,10 +329,84 @@ export class SessionStore {
     const row = this.db.prepare('SELECT transactions_json FROM account_cache WHERE account_id = ?').get(accountId) as { transactions_json?: string } | undefined;
     if (!row || !row.transactions_json) return null;
     try {
-      return JSON.parse(row.transactions_json);
+      const parsed = JSON.parse(row.transactions_json) as unknown[];
+      return this.filterHiddenTransactions(accountId, parsed);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Soft-delete (tombstone) transactions: the raw data stays in `account_cache`
+   * untouched, but every read path that consults `hidden_transactions` filters
+   * them out — now and on every future bank re-fetch.
+   */
+  hideTransactions(entries: Array<{ accountId: string; tx: unknown; reason: string }>): { transactions: number; keysWritten: number } {
+    const now = Date.now();
+    const insert = this.db.prepare(`
+      INSERT INTO hidden_transactions (account_id, tx_key, reason, payload, hidden_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, tx_key) DO UPDATE SET
+        reason = excluded.reason,
+        payload = excluded.payload,
+        hidden_at = excluded.hidden_at
+    `);
+    let keysWritten = 0;
+    const runAll = this.db.transaction((items: Array<{ accountId: string; tx: unknown; reason: string }>) => {
+      for (const item of items) {
+        const payload = JSON.stringify(item.tx);
+        for (const key of transactionKeyCandidates(item.tx)) {
+          insert.run(item.accountId, key, item.reason, payload, now);
+          keysWritten++;
+        }
+      }
+    });
+    runAll(entries);
+    return { transactions: entries.length, keysWritten };
+  }
+
+  getHiddenTxKeys(accountId: string): Set<string> {
+    const rows = this.db.prepare('SELECT tx_key FROM hidden_transactions WHERE account_id = ?').all(accountId) as Array<{ tx_key: string }>;
+    return new Set(rows.map(r => r.tx_key));
+  }
+
+  filterHiddenTransactions<T>(accountId: string, txs: T[]): T[] {
+    if (txs.length === 0) return txs;
+    const hidden = this.getHiddenTxKeys(accountId);
+    if (hidden.size === 0) return txs;
+    return txs.filter(tx => !transactionKeyCandidates(tx).some(k => hidden.has(k)));
+  }
+
+  isTransactionHidden(accountId: string, tx: unknown): boolean {
+    const hidden = this.getHiddenTxKeys(accountId);
+    if (hidden.size === 0) return false;
+    return transactionKeyCandidates(tx).some(k => hidden.has(k));
+  }
+
+  getHiddenTransactions(accountId?: string): HiddenTransactionRow[] {
+    if (accountId) {
+      return this.db.prepare('SELECT * FROM hidden_transactions WHERE account_id = ? ORDER BY hidden_at ASC, tx_key ASC').all(accountId) as HiddenTransactionRow[];
+    }
+    return this.db.prepare('SELECT * FROM hidden_transactions ORDER BY account_id ASC, hidden_at ASC').all() as HiddenTransactionRow[];
+  }
+
+  /**
+   * Reversibility valve for soft-deletes. At least one filter is required.
+   * Returns the number of tombstone key rows removed — a single transaction
+   * can carry multiple keys (entry_reference + transaction_id), so this is a
+   * row count, not a transaction count.
+   */
+  unhideTransactions(filter: { accountId?: string; reason?: string }): number {
+    if (!filter.accountId && !filter.reason) {
+      throw new Error('unhideTransactions requires an accountId or reason filter');
+    }
+    if (filter.accountId && filter.reason) {
+      return this.db.prepare('DELETE FROM hidden_transactions WHERE account_id = ? AND reason = ?').run(filter.accountId, filter.reason).changes;
+    }
+    if (filter.accountId) {
+      return this.db.prepare('DELETE FROM hidden_transactions WHERE account_id = ?').run(filter.accountId).changes;
+    }
+    return this.db.prepare('DELETE FROM hidden_transactions WHERE reason = ?').run(filter.reason!).changes;
   }
 
   saveBankConnection(conn: {

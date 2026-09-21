@@ -19,12 +19,13 @@ export interface ToolContext {
   getSessionStore?(): SessionStore | null;
 }
 
-// 5-minute in-memory cache to prevent PSD2 rate limits
+// In-memory cache to prevent PSD2 rate limits. Enable Banking has asked for a
+// polling floor of ~20 minutes; keep this aligned with that guidance.
 const cache = {
   balances: new Map<string, { data: EnableBankingBalance[]; timestamp: number }>(),
   transactions: new Map<string, { data: EnableBankingTransaction[]; timestamp: number }>(),
 };
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 20 * 60 * 1000;
 
 async function getCachedBalances(
   client: EnableBankingClient,
@@ -61,9 +62,14 @@ async function getCachedTransactions(
   sessionStore?: SessionStore | null,
 ): Promise<EnableBankingTransaction[]> {
   const cacheKey = `${accountId}:${dateFrom || ''}:${dateTo || ''}`;
+  // Tombstoned (soft-deleted) transactions are filtered on every return path so
+  // they stay gone across cache hits and fresh bank fetches.
+  const visible = (txs: EnableBankingTransaction[]): EnableBankingTransaction[] =>
+    sessionStore ? sessionStore.filterHiddenTransactions(accountId, txs) : txs;
+
   const cached = cache.transactions.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return cached.data;
+    return visible(cached.data);
   }
   try {
     const txs = await client.getTransactions(accountId, dateFrom, dateTo);
@@ -71,12 +77,12 @@ async function getCachedTransactions(
     if (sessionStore) {
       sessionStore.saveAccountTransactions(accountId, txs);
     }
-    return txs;
+    return visible(txs);
   } catch (err) {
     if (sessionStore) {
       const persisted = sessionStore.getAccountTransactions(accountId) as EnableBankingTransaction[];
       if (persisted && persisted.length > 0) {
-        return persisted;
+        return visible(persisted);
       }
     }
     throw err;
@@ -594,7 +600,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
       }
 
       try {
-        const transactions = await getCachedTransactions(client, account_id, date_from, date_to);
+        const transactions = await getCachedTransactions(client, account_id, date_from, date_to, sessionStore);
         return { content: [{ type: 'text' as const, text: JSON.stringify({ account_id, date_from, date_to, count: transactions.length, transactions }, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error fetching transactions: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
@@ -617,6 +623,9 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
 
       try {
         const details = await client.getTransactionDetails(account_id, transaction_id);
+        if (sessionStore?.isTransactionHidden(account_id, details)) {
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ account_id, transaction_id, hidden: true, details: null, note: 'Transaction hidden by household rule' }) }] };
+        }
         return { content: [{ type: 'text' as const, text: JSON.stringify({ account_id, transaction_id, details }, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error fetching transaction: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
@@ -643,7 +652,7 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
         const lowerQuery = query.toLowerCase();
 
         for (const accId of accountIds) {
-          const transactions = await getCachedTransactions(client, accId);
+          const transactions = await getCachedTransactions(client, accId, undefined, undefined, sessionStore);
           const matches = transactions.filter(tx => {
             const searchable = [
               tx.remittance_information_unstructured,

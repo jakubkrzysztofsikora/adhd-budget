@@ -13,7 +13,8 @@
     "test:integration": "vitest run tests/integration/",
     "test:e2e": "vitest run tests/e2e/",
     "test:all": "vitest run",
-    "import-session": "tsx src/scripts/import-session.ts"
+    "import-session": "tsx src/scripts/import-session.ts",
+    "hide-transactions": "tsx src/scripts/hide-transactions.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
