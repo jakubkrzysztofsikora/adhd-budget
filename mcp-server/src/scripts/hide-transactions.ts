@@ -103,18 +103,29 @@ function main(): void {
 
   // Verify through the actual read path (getAccountTransactions), not by re-deriving keys.
   // Note: `!= null` — Enable Banking transactions can carry explicit null identifiers.
-  let stillVisible = 0;
+  const survivors: string[] = [];
   for (const r of resolved) {
-    const t = r.tx as { entry_reference?: string | null; transaction_id?: string | null };
+    const t = r.tx as Record<string, unknown>;
     const visible = (store.getAccountTransactions(r.accountId) || []) as Array<Record<string, unknown>>;
-    const found = visible.some(v =>
-      (t.entry_reference != null && v.entry_reference === t.entry_reference) ||
-      (t.transaction_id != null && v.transaction_id === t.transaction_id));
-    if (found) stillVisible++;
+    const found = visible.some(v => {
+      const tRef = t.entry_reference as string | null | undefined;
+      const vRef = v.entry_reference as string | null | undefined;
+      if (tRef != null && vRef != null) return tRef === vRef;
+      const tTid = t.transaction_id as string | null | undefined;
+      const vTid = v.transaction_id as string | null | undefined;
+      if (tTid != null && vTid != null) return tTid === vTid;
+      // identifier-less: compare full content
+      return JSON.stringify(t) === JSON.stringify(v);
+    });
+    if (found) survivors.push(`${r.accountId.slice(0, 8)} ${r.label}`);
   }
-  console.log(`Verification: ${stillVisible} still visible via read path (expected 0)`);
+  console.log(`Verification: ${survivors.length} still visible via read path (expected 0)`);
+  if (survivors.length > 0) {
+    for (const s of survivors) console.error(`  STILL VISIBLE: ${s}`);
+    store.close();
+    process.exit(1);
+  }
   store.close();
-  if (stillVisible !== 0) process.exit(1);
 }
 
 main();

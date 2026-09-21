@@ -85,6 +85,20 @@ describe('SessionStore', () => {
     expect(store.filterHiddenTransactions('acc-hash', [{ ...tx, transaction_amount: { amount: '12.35' } }])).toHaveLength(1);
   });
 
+  it('applies tombstones added after a read to the same (cached) array on subsequent reads', () => {
+    const a = { entry_reference: 'L;1', transaction_id: 'Tl1', transaction_amount: { amount: '50.00' } };
+    const b = { entry_reference: 'L;2', transaction_id: 'Tl2', transaction_amount: { amount: '60.00' } };
+    const cachedArray = [a, b];
+
+    // read before the hide: both visible
+    expect(store.filterHiddenTransactions('acc-late', cachedArray)).toHaveLength(2);
+    // hide after the array was cached
+    store.hideTransactions([{ accountId: 'acc-late', tx: a, reason: 'test:late' }]);
+    // same array object, next read: tombstone applies without any cache invalidation
+    expect(store.filterHiddenTransactions('acc-late', cachedArray)).toHaveLength(1);
+    expect((store.filterHiddenTransactions('acc-late', cachedArray) as Array<{ entry_reference: string }>)[0].entry_reference).toBe('L;2');
+  });
+
   it('does not over-hide identical-content twins when identifiers differ', () => {
     const twinA = { entry_reference: 'A;1', transaction_id: 'Ta', transaction_amount: { amount: '100.00' }, credit_debit_indicator: 'DBIT', booking_date: '2026-09-08', remittance_information: ['Z', 'TRANSFER'] };
     const twinB = { entry_reference: 'B;1', transaction_id: 'Tb', transaction_amount: { amount: '100.00' }, credit_debit_indicator: 'DBIT', booking_date: '2026-09-08', remittance_information: ['Z', 'TRANSFER'] };

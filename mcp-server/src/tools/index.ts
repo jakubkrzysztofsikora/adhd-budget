@@ -622,6 +622,10 @@ export function registerTools(server: McpServer, ctx?: ToolContext): void {
       }
 
       try {
+        // Check the tombstone first so hidden transactions never hit the bank API
+        if (sessionStore?.isTransactionHidden(account_id, { transaction_id })) {
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ account_id, transaction_id, hidden: true, details: null, note: 'Transaction hidden by household rule' }) }] };
+        }
         const details = await client.getTransactionDetails(account_id, transaction_id);
         if (sessionStore?.isTransactionHidden(account_id, details)) {
           return { content: [{ type: 'text' as const, text: JSON.stringify({ account_id, transaction_id, hidden: true, details: null, note: 'Transaction hidden by household rule' }) }] };
